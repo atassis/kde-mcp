@@ -1,0 +1,115 @@
+# kde-mcp policy configuration — example with sensible defaults.
+#
+# Install to ~/.config/kde-mcp/policy.toml during Phase 3 of MVP implementation.
+# Loaded once at process start; not hot-reloaded.
+#
+# See spec §6.0 (the policy gate) and §10 (safety model).
+
+# ─── Global cancel shortcut ──────────────────────────────────────────────────
+# Registered via KGlobalAccel D-Bus. KWin grabs the key at compositor level so
+# apps don't see it (defense against prompt-injection-dismissed dialogs).
+[cancel]
+shortcut = "Meta+Escape"
+
+# ─── Bash blocklist toggles ──────────────────────────────────────────────────
+[bash]
+allow_sudo = false        # if true, `sudo` is permitted in bash; otherwise blocked at the gate
+allow_pkexec = false
+
+# ─── App tiering ─────────────────────────────────────────────────────────────
+# default_tier applies to any app class not matched below.
+# Tiers:
+#   view_only  — destructive tools rejected (tier_restricted error)
+#   click_only — keyboard.type blocked; keyboard.key allowed only for navigation keys
+#                (Tab, Return, Escape, Page_Up/Down, Home/End, arrow keys, common
+#                 modifier chords like Ctrl+C/V/X). Click/scroll/drag allowed.
+#   full       — all destructive tools allowed (still subject to per-app approval)
+[apps]
+default_tier = "full"
+
+# Browsers and equivalent: view-only by default. Use Playwright-MCP for browser automation.
+[[apps.entries]]
+class_match = ["firefox", "firefox-esr", "chromium", "Chromium",
+               "google-chrome", "google-chrome-stable", "Google-chrome",
+               "Brave-browser", "brave", "vivaldi", "vivaldi-stable",
+               "Microsoft-edge", "msedge", "opera", "Opera",
+               "io.gitlab.librewolf-community", "LibreWolf",
+               "zen-browser", "Zen-Browser"]
+tier = "view_only"
+
+# Terminals: click-only. Sentinel: shell_access.
+# Typing into a terminal can run arbitrary shell commands; route those through
+# the `bash` tool instead, which carries its own blocklist + audit log.
+[[apps.entries]]
+class_match = ["konsole", "org.kde.konsole", "yakuake", "org.kde.yakuake",
+               "alacritty", "Alacritty", "kitty", "wezterm-gui", "WezTerm",
+               "foot", "ghostty", "tilix", "gnome-terminal", "gnome-terminal-server",
+               "xterm", "UXTerm", "xfce4-terminal", "ptyxis", "warp-terminal",
+               "rio", "Rio", "tabby", "Tabby"]
+tier = "click_only"
+sentinel = "shell_access"
+
+# IDEs and code editors: click-only (typing into a command palette can be
+# equivalent to shell access; route deliberate edits through text_editor_edit).
+[[apps.entries]]
+class_match = ["code", "Code", "code-oss", "code-insiders",
+               "jetbrains-idea", "jetbrains-idea-ce",
+               "jetbrains-pycharm", "jetbrains-pycharm-ce",
+               "jetbrains-rubymine", "jetbrains-webstorm",
+               "jetbrains-goland", "jetbrains-clion", "jetbrains-datagrip",
+               "sublime_text", "Sublime_text", "atom", "Atom",
+               "kate", "org.kde.kate", "kdevelop", "qtcreator",
+               "neovim-qt", "gvim", "emacs"]
+tier = "click_only"
+
+# File managers: full tier but with filesystem_access sentinel.
+[[apps.entries]]
+class_match = ["org.kde.dolphin", "dolphin", "nautilus", "thunar",
+               "pcmanfm", "pcmanfm-qt", "krusader", "doublecmd"]
+tier = "full"
+sentinel = "filesystem_access"
+
+# System settings: full tier but with system_settings sentinel.
+[[apps.entries]]
+class_match = ["systemsettings", "org.kde.systemsettings",
+               "gnome-control-center", "yast", "yast2-control-center"]
+tier = "full"
+sentinel = "system_settings"
+
+# Password / secrets managers: full tier but always sentinel-warned.
+# Note: per-app approval will be required on every session.
+[[apps.entries]]
+class_match = ["org.keepassxc.KeePassXC", "keepassxc",
+               "Bitwarden", "bitwarden",
+               "1Password", "1password"]
+tier = "full"
+sentinel = "filesystem_access"
+
+# ─── Terminal-excluded screenshots ───────────────────────────────────────────
+# When `screenshot` is invoked, windows of these classes have their bbox
+# replaced with a solid black rectangle + "[terminal masked]" label before
+# the PNG is returned. Defense against the agent reading its own terminal
+# output as instructions.
+[screenshots]
+masked_classes = ["konsole", "org.kde.konsole", "yakuake", "org.kde.yakuake",
+                  "alacritty", "Alacritty", "kitty", "wezterm-gui", "WezTerm",
+                  "foot", "ghostty", "tilix", "gnome-terminal", "gnome-terminal-server",
+                  "xterm", "UXTerm", "xfce4-terminal", "ptyxis", "warp-terminal",
+                  "rio", "Rio", "tabby", "Tabby"]
+
+# ─── Approval flow timing ────────────────────────────────────────────────────
+# Approval state is per-process (in-memory). When a destructive action targets
+# an un-approved app, a notification fires and the tool returns
+# `app_approval_required`. Agent retries; if user hasn't clicked yet, gets
+# `still_pending: true`.
+[approval]
+notification_timeout_ms = 30000
+notification_app_id = "kde-mcp"
+
+# ─── Sensitive paths (for text_editor_edit / bash warnings) ──────────────────
+# Touching files under these paths emits `warnings: [...]` in tool responses.
+# Not blocked; the host's permission mode decides whether to escalate.
+[sensitive_paths]
+patterns = ["~/.ssh/", "~/.gnupg/", "~/.config/keepassxc/",
+            "~/.config/git/", "~/.aws/", "~/.kube/",
+            "/etc/", "/boot/", "/root/"]

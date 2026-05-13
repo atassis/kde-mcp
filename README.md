@@ -44,12 +44,14 @@ For the full side-by-side comparison see `docs/comparison-with-anthropic-compute
 
 ## Quick orientation
 
-- `docs/specs/` — the design specification (the load-bearing document).
-- `docs/research/` — collated research that informed the design (Anthropic spec deep-dive, Wayland/KDE primitive landscape, prior-art survey, LLM tool-design principles).
-- `docs/adr/` — Architecture Decision Records: one file per non-obvious choice with the reasoning frozen at the moment it was made.
-- `docs/comparison-with-anthropic-computer-use.md` — side-by-side analysis.
-- `packaging/` — `.desktop` file for KWin ScreenShot2 D-Bus authorization, install notes.
-- `src/` — Rust source (empty until implementation phase begins).
+- `CLAUDE.md` — operating instructions for AI assistants working in this repo (read first if you're a fresh Claude session)
+- `docs/HANDOFF.md` — current project state and the concrete next step (read second)
+- `docs/specs/` — the design specification (the load-bearing document)
+- `docs/research/` — collated research that informed the design (Anthropic spec deep-dive, Wayland/KDE primitive landscape, prior-art survey, LLM tool-design principles)
+- `docs/adr/` — Architecture Decision Records (7 of them): one file per non-obvious choice with the reasoning frozen at the moment it was made
+- `docs/comparison-with-anthropic-computer-use.md` — side-by-side analysis
+- `packaging/` — `.desktop` file for KWin ScreenShot2 D-Bus authorization, install notes, and `policy.toml.example` with sensible safety defaults
+- `src/` — Rust source (empty until implementation phase begins)
 
 ## Hard scope limits
 
@@ -61,4 +63,6 @@ For the full side-by-side comparison see `docs/comparison-with-anthropic-compute
 
 ## Status of the work
 
-This repository currently contains design artifacts only. Implementation will begin after the spec is reviewed.
+This repository currently contains design artifacts only. **Implementation has not started.** The brainstorming workflow that produced this design ends here; the next step is invoking the `superpowers:writing-plans` skill to turn the spec into a sequenced implementation plan (see `docs/HANDOFF.md`).
+
+To continue work in a fresh session, open this repo and read `CLAUDE.md` and `docs/HANDOFF.md` first.
