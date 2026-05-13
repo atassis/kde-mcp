@@ -148,7 +148,7 @@ Two processes, two audit logs, two failure domains, no internal mode-routing plu
 ┌──────────────────────────────────────────────────────────────────────┐
 │  MCP host (Claude Code / Claude Desktop / Cline / Cursor / Zed)      │
 └───────────────────────────────┬──────────────────────────────────────┘
-                                │ stdio · JSON-RPC · MCP 2025-06-18
+                                │ stdio · JSON-RPC · MCP 2025-11-25
                                 ▼
 ┌──────────────────────────────────────────────────────────────────────┐
 │  kde-mcp (single Rust binary, single tokio runtime)                  │
@@ -864,6 +864,50 @@ kde-mcp/
     └── apps/
 ```
 
+### 13.1 Library version pins and plan-level adaptations (added 2026-05-14)
+
+The pinned versions in HANDOFF.md (`rmcp = "0.1"`, `reis = "0.4"`, `atspi = "0.22"`) were placeholders captured during the design conversation. Before plan writing, current crates.io versions were surveyed; see `docs/research/2026-05-13-rust-stack-current-apis.md` for the full delta. The pins below are what Phase 0 will compile against.
+
+| Crate | Pin | Notes |
+|---|---|---|
+| `rmcp` | `1.7.0` | Major rewrite vs. 0.1. Uses `#[tool_router]` / `#[tool]` / `#[tool_handler]` proc-macros. See "Module-layout adaptation" below. |
+| `atspi` | `0.30.0` (tokio feature) | Pre-1.0, expect quarterly bumps. Pin exactly. |
+| `reis` | `=0.6.1` | Single-maintainer, explicit "API may change" notice. Pin exactly; budget one bring-up break per year. |
+| `zbus` | `5.15.0` | |
+| `tokio` | `1.52` (current at design time; floor `1.40`) | multi-thread runtime, default features. |
+| `notify-rust` | `4.17.0` | `org.freedesktop.Notifications` client; action-button delivery is the load-bearing surface. |
+| `portable-pty` | `0.9.0` | persistent bash session. |
+| `fd-lock` | `4.0.4` | single-session lockfile. |
+| `image` | `0.25.10` | ARGB → PNG, resize, terminal-mask overlay. |
+| `tesseract` | `0.15.2` (binding) | OCR. `leptess 0.14` is an alternative if `tesseract` proves brittle. |
+| `thiserror` | `2.0.x` | library error types. |
+| `anyhow` | `1.0.x` | binary-boundary error. |
+| `clap` | `4.6.x` | CLI parsing. |
+| `serde` / `serde_json` | `1.0.x` | wire format. |
+| `toml` | `1.1.x` | `~/.config/kde-mcp/policy.toml`. |
+| `tracing` / `tracing-subscriber` | `0.1.44` / `0.3.23` | structured logging. |
+| `xkbcommon` | `0.8.x` (added 2026-05-14) | **Not previously listed.** Required for evdev-minus-8 keycode conversion when injecting input through `reis`. Surfaces in `src/tools/keyboard.rs`. |
+
+**MSRV:** Rust 1.85+ (edition 2024). Local development against stable 1.95+. Spec §13 originally said "1.78+"; the higher floor unlocks stable async-fn-in-traits and current edition without affecting any decision in ADRs 0001–0007.
+
+**Module-layout adaptation (rmcp 1.7).** The §13 tree above sketches one tool implementation per `src/tools/<name>.rs`. That maps poorly onto the current `rmcp` API, which concentrates tool routing in a single struct with `#[tool_router]` + `#[tool]` methods. Resolution:
+
+- A new `src/server.rs` holds the `KdeMcp` struct with all `#[tool]` methods (15 of them). Each `#[tool]` method is a thin shim: parameter validation, then delegation to a helper module under `src/tools/`.
+- The `src/tools/<name>.rs` files survive — they expose **free functions** (`pub(crate) async fn observe(state: &KdeMcp, args: ObserveArgs) -> Result<ObserveResponse, ToolError>`) called by the matching `#[tool]` shim. Same code, same testability, different binding to the MCP wire layer.
+- `src/lib.rs` adds `pub mod server;` and re-exports the `KdeMcp` type for the integration tests.
+
+This is a plan-level adaptation, not a design change. ADR-0006 (15 tools, split read/write, consolidated along intent) is unchanged — the proc-macro form is just how `rmcp 1.7` expresses it.
+
+**Phase 0 spike tasks (verify before any tool code).** These come out of the API research and must pass in Phase 0 before Phase 1 starts:
+
+1. Confirm `rmcp::ProtocolVersion::V_2025_11_25` (or whichever variant covers the latest spec) is exported. If only `V_2024_11_05` is available, the conformance claim in §1 is provisional — the server still works, but the citation in §16 needs to match what `rmcp` actually advertises.
+2. Verify `#[tool_router]` composes across multiple `impl` blocks (so `src/server.rs` can split tool methods by category without forcing a 15-method monolith).
+3. Read `atspi-proxies/src/action.rs` to nail the `do_action` signature used by `act_on_element`.
+4. Read `reis::pointer_absolute` (exact module / fn name unverified) for `motion_absolute`. If the API takes a different shape, `src/tools/mouse.rs`'s `move_to` semantics need adjusting.
+5. Verify KWin's `org.kde.KWin.EIS.RemoteDesktop` D-Bus method signature against the live system with `qdbus6` before writing `src/kwin/eis.rs`.
+
+These are scope-bounded, falsifiable, and short. Each becomes one task in the Phase 0 plan.
+
 ---
 
 ## 14. MVP phasing
@@ -909,7 +953,7 @@ Anthropic:
 - [Building effective agents](https://www.anthropic.com/engineering/building-effective-agents)
 
 MCP:
-- [Spec 2025-06-18](https://modelcontextprotocol.io/specification/2025-06-18)
+- [Spec 2025-11-25](https://modelcontextprotocol.io/specification/2025-11-25)
 - [Rust SDK (rmcp)](https://github.com/modelcontextprotocol/rust-sdk)
 
 KDE / Wayland:

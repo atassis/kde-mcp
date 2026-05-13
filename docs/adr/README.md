@@ -15,6 +15,7 @@ Format: 1-2 pages each. Sections: Status · Context · Decision · Consequences 
 | 0005 | Accessibility-tree first; pixels as fallback | Accepted |
 | 0006 | 15 tools split read/write; no Anthropic-style omni-tool | Accepted |
 | 0007 | Adopt Anthropic computer-use safety architecture (policy gate) | Accepted |
+| 0008 | Visual prompt injection defence is host-side, not server-side  | Accepted |
 
 ## When to add an ADR
 
