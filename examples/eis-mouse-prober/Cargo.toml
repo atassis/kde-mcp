@@ -1,0 +1,13 @@
+[package]
+name = "eis-mouse-prober"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+anyhow = "1"
+zbus = { version = "5.15", features = ["tokio"] }
+zvariant = "5.7"
+reis = { version = "=0.6.1", features = ["tokio"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
+futures-util = "0.3"
