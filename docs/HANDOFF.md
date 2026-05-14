@@ -4,12 +4,31 @@ A snapshot of project state at the moment the design conversation paused. Read t
 
 ---
 
-## Current status (2026-05-13)
+## Current status (2026-05-14)
 
-- **Phase:** design-only. No source code yet.
-- **Last commit:** `5d2a943 feat(design): adopt Anthropic computer-use safety architecture (ADR-0007)`
-- **Branch:** `main` (single branch; no remote configured)
-- **Working tree:** clean
+- **Phase:** **Phase 0 complete.** Ready for Phase 1 (read-only tools).
+- **Last commit:** `1c82d6d style(phase-0): cargo fmt + clippy clean` (Phase 0 sign-off).
+- **Tag:** `phase-0` (local; not pushed — there's still no remote).
+- **Branch:** `main` (single branch; no remote configured).
+- **Working tree:** clean.
+
+### What Phase 0 shipped
+
+The `kde-mcp` binary compiles, registers as an MCP server, and advertises 16 wire-named tools (15 logical — `keyboard.{type,key}` and `text_editor.{view,edit}` split). Every tool returns `not_implemented` with the structured `{code, details}` payload per spec §8.
+
+End-to-end smoke-verified on the dev machine (CachyOS, KWin 6 Wayland) via a scripted JSON-RPC handshake (`tests/integration/SMOKE.md`):
+
+- `initialize` round-trips with `protocolVersion: 2025-11-25`, `serverInfo: {name: 'kde-mcp', version: '0.1.0'}`.
+- `tools/list` returns the 16-name set with correct schemas + `readOnlyHint`/`destructiveHint`/`openWorldHint` annotations.
+- `tools/call` returns `isError: true` with the structured payload.
+- Per-mode lockfile acquired at `$XDG_RUNTIME_DIR/kde-mcp/<mode>.lock`; cross-process contention reports holder PID.
+- KDE acquire / release notifications fire on startup / shutdown.
+- 22 unit tests + 15 integration tests pass under `cargo test --workspace`.
+- `cargo fmt` clean, `cargo clippy --workspace --all-targets -- -D warnings` clean.
+
+### Phase 0 also produced a non-trivial bonus
+
+`examples/eis-keystroke-prober/` is a standalone POC that exercises the **exact code path Phase 2 will use** for libei keystroke injection: zbus → `org.kde.KWin.EIS.RemoteDesktop.connectToEIS(1)` → reis `handshake_tokio(Sender)` → virtual keyboard device → `Ctrl+Tab`. Verified working live against Brave; findings are recorded in `docs/research/2026-05-14-phase-0-spikes.md` postscript. **This de-risks Phase 2 significantly** — the previously-unverified primitive is now known to work on this exact stack.
 
 ## What was decided
 
@@ -33,24 +52,31 @@ The MVP is sized at **18–23 working days for phases 0–5**, plus open-ended p
 
 In strict order:
 
-1. **Spec review by atassis.** (Brainstorming skill step 7.) The user wanted to defer this to a fresh session. The spec is committed and complete; just needs to be read.
-2. **Invocation of the `superpowers:writing-plans` skill** to turn the spec into an implementation plan with TDD-shaped tasks. (Brainstorming skill step 8.) This is the **terminal state of the brainstorming flow.**
-3. **Phase 0 implementation:** `cargo new`, rmcp wiring, `--mode` flag, audit log, error taxonomy, single-session lock + KDE notifications, stub all 15 tools to return `not_implemented`. See spec §14.
-4. **Phases 1–5** per the table in spec §14.
-5. **Phase 6 polish.**
+1. ~~Spec review by atassis.~~ Done 2026-05-13.
+2. ~~Invocation of `superpowers:writing-plans`.~~ Done; plan at `docs/plans/2026-05-14-phase-0-skeleton.md`.
+3. ~~**Phase 0 implementation.**~~ **Done 2026-05-14.** See "What Phase 0 shipped" above.
+4. **Phase 1 plan + implementation:** read-only tools — `observe`, `inspect`, `window_query`, `screenshot` (with terminal masking), `clipboard_read`, `text_editor.view`. Spec §14 row 1. **Next step:** invoke `superpowers:writing-plans` again, this time targeting Phase 1.
+5. **Phases 2–5** per spec §14.
+6. **Phase 6 polish.**
 
-## Open questions to resolve before implementation
+## Open questions resolved during Phase 0
 
-The spec is honest about what it doesn't commit to:
+The list of open questions in the original handoff is largely closed:
 
-- **rmcp SDK version specifics.** `Cargo.toml` declares `rmcp = "0.1"` but the API may have moved. Verify before Phase 0 with `cargo search rmcp` and `cargo doc --open` — adjust the `mod.rs` patterns to match the current SDK.
-- **reis crate libei version compatibility.** Cargo declares `reis = "0.4"`. Test the EIS-fd handoff dance against the user's installed `libei` version (`pkg-config --modversion libei`).
-- **atspi crate's async surface.** `atspi = "0.22"` with `tokio` feature. Validate against the documented event loop before structuring `src/atspi/connection.rs`.
-- **KWin Scripting D-Bus calling pattern.** The spec says "load script, run, read output via signal or temp file, unload" (kdotool's pattern). Decide concretely: signal-based output capture vs. write-to-temp-file. Probably write-to-temp-file is simpler for MVP.
-- **KGlobalAccel registration semantics.** The cancel-shortcut design assumes KGlobalAccel grants compositor-level key grab. Verify against KDE Plasma 6.5+ behaviour; some shortcut classes require additional setup.
-- **`org.freedesktop.Notifications` action button event delivery.** The per-app approval design relies on receiving the user's button click via D-Bus signal. Confirm KDE's notification daemon (or `plasma-workspace`'s notification server) routes button clicks back consistently — older specs let action data be lost on dismiss.
+- ~~rmcp SDK version specifics.~~ Pinned `rmcp = "1.7"` (was `0.1`). Spike 0.2 found the proc-macro pattern; the layout adaptation lives in `docs/specs/...md` §13.1 and the `src/server.rs` single-impl-block.
+- ~~reis crate libei version compatibility.~~ EIS handoff verified end-to-end against KWin 6 via `examples/eis-keystroke-prober/`. `flags=1` is the sender bit (undocumented; recorded in the spikes postscript).
+- ~~atspi crate's async surface.~~ Pin updated to `0.30.0`; the tokio-feature pattern is unchanged. Phase 1 will exercise it concretely.
+- **Still open — KWin Scripting D-Bus output capture.** During Task 0 spikes we used the `print()` → journald path for the prober's window enumeration. Phase 1's `window_query` should pick: kdotool-style write-to-temp-file vs. our journald capture vs. the in-script `callDBus` round-trip pattern. The choice is a Phase 1 plan-level concern.
+- **Still open — KGlobalAccel cancel-shortcut grab.** Phase 3 will deal with this; it's not on Phase 1's critical path.
+- **Still open — `org.freedesktop.Notifications` action-button delivery.** Phase 3 (policy gate / per-app approval) needs this. Phase 1 only uses notifications for acquire/release events, which Phase 0 already verified.
 
-These are all things the writing-plans phase should turn into explicit "verify before phase X" tasks.
+### Phase 1's pre-plan checklist
+
+Before invoking `superpowers:writing-plans` for Phase 1, decide:
+
+1. KWin Scripting output capture mechanism (the three options above).
+2. Whether `window_query` returns a flat list or a per-screen grouping by default (spec §6.1 leaves this open).
+3. Whether `screenshot` masks terminals in Phase 1 (spec §10 layer 7 — but layer 7 is wired through the policy gate which is Phase 3; for Phase 1 the masking could be a static class-list filter, then policy-gate-integrated in Phase 3).
 
 ## Things the user explicitly chose
 
