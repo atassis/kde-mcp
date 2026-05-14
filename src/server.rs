@@ -33,6 +33,7 @@ pub struct KdeMcp {
     pub bus: zbus::Connection,
     pub atspi: Arc<crate::atspi::connection::AtspiConnection>,
     pub policy: crate::policy::SharedPolicyGate,
+    pub bash_session: Arc<std::sync::Mutex<Option<crate::tools::bash::BashSession>>>,
     pub tool_router: ToolRouter<KdeMcp>,
 }
 
@@ -50,6 +51,7 @@ impl KdeMcp {
             bus,
             atspi: Arc::new(crate::atspi::connection::AtspiConnection::default()),
             policy,
+            bash_session: Arc::new(std::sync::Mutex::new(None)),
             tool_router: Self::tool_router(),
         }
     }
@@ -70,6 +72,7 @@ impl KdeMcp {
             bus,
             atspi: Arc::new(crate::atspi::connection::AtspiConnection::default()),
             policy,
+            bash_session: Arc::new(std::sync::Mutex::new(None)),
             tool_router: Self::tool_router(),
         }
     }

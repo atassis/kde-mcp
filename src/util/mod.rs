@@ -2,3 +2,4 @@
 //! (for `bash`) and other helpers.
 
 pub mod image;
+pub mod sensitive_paths;

@@ -1,5 +1,6 @@
 use crate::error::ToolError;
 use crate::server::KdeMcp;
+use crate::util::sensitive_paths;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -15,7 +16,7 @@ pub struct TextEditorViewArgs {
 #[derive(Debug, Default, Serialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub struct TextEditorViewResponse {
-    pub kind: String, // "file" | "directory"
+    pub kind: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub content: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -29,18 +30,30 @@ pub struct TextEditorViewResponse {
 #[derive(Debug, Deserialize, JsonSchema, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub struct TextEditorEditArgs {
-    pub command: String,
+    pub command: String, // "create" | "str_replace" | "insert"
     pub path: String,
+    #[serde(default)]
+    pub file_text: Option<String>,
     #[serde(default)]
     pub old_str: Option<String>,
     #[serde(default)]
     pub new_str: Option<String>,
     #[serde(default)]
-    pub content: Option<String>,
+    pub insert_line: Option<i32>,
+    #[serde(default)]
+    pub insert_text: Option<String>,
 }
 
 #[derive(Debug, Default, Serialize, JsonSchema)]
-pub struct TextEditorEditResponse {}
+#[serde(rename_all = "snake_case")]
+pub struct TextEditorEditResponse {
+    pub ok: bool,
+    pub command: String,
+    /// ±4 lines around the change, like Anthropic's str_replace_based_edit_tool.
+    pub snippet: String,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
+}
 
 pub async fn text_editor_view(
     _state: &KdeMcp,
@@ -72,9 +85,6 @@ async fn view_file(
             path: path.to_string_lossy().to_string(),
             error: e.to_string(),
         })?;
-    // split_inclusive('\n') keeps trailing newline characters on each entry so
-    // that re-joining produces an identical file body. An empty file gives a
-    // single empty "line" — we special-case that by treating total = 0.
     let lines: Vec<&str> = if body.is_empty() {
         Vec::new()
     } else {
@@ -105,8 +115,6 @@ async fn view_file(
 
 fn resolve_range(range: Option<[i32; 2]>, total: usize) -> Result<(usize, usize), ToolError> {
     if total == 0 {
-        // Empty file: range is moot. Report [1, 0] so the caller knows nothing
-        // was viewed.
         return Ok((1, 0));
     }
     let Some([s, e]) = range else {
@@ -184,7 +192,155 @@ fn walk<'a>(
 
 pub async fn text_editor_edit(
     _state: &KdeMcp,
-    _args: TextEditorEditArgs,
+    args: TextEditorEditArgs,
 ) -> Result<TextEditorEditResponse, ToolError> {
-    Err(ToolError::NotImplemented)
+    let path_str = args.path.clone();
+    let path = Path::new(&path_str);
+    if !path.is_absolute() {
+        return Err(ToolError::PermissionDenied {
+            reason: format!("absolute path required, got: {path_str}"),
+        });
+    }
+    let mut warnings = Vec::new();
+    if let Some(w) = sensitive_paths::warning_for_path(&path_str) {
+        warnings.push(w);
+    }
+
+    match args.command.to_ascii_lowercase().as_str() {
+        "create" => {
+            let body = args.file_text.unwrap_or_default();
+            if let Some(parent) = path.parent() {
+                tokio::fs::create_dir_all(parent)
+                    .await
+                    .map_err(|e| ToolError::Io {
+                        path: parent.to_string_lossy().to_string(),
+                        error: e.to_string(),
+                    })?;
+            }
+            tokio::fs::write(path, &body)
+                .await
+                .map_err(|e| ToolError::Io {
+                    path: path_str.clone(),
+                    error: e.to_string(),
+                })?;
+            let snippet = snippet_around(&body, 1, body.lines().count().max(1));
+            Ok(TextEditorEditResponse {
+                ok: true,
+                command: "create".into(),
+                snippet,
+                warnings,
+            })
+        }
+        "str_replace" => {
+            let old_str = args.old_str.ok_or_else(|| ToolError::UnsupportedRegion {
+                reason: "str_replace requires old_str".into(),
+            })?;
+            let new_str = args.new_str.unwrap_or_default();
+            let body = tokio::fs::read_to_string(path)
+                .await
+                .map_err(|e| ToolError::Io {
+                    path: path_str.clone(),
+                    error: e.to_string(),
+                })?;
+            let matches: Vec<_> = body.match_indices(&old_str).collect();
+            if matches.is_empty() {
+                return Err(ToolError::TargetNotFound {
+                    closest_match: Some(format!(
+                        "old_str not present in {}",
+                        path.file_name().unwrap_or_default().to_string_lossy()
+                    )),
+                });
+            }
+            if matches.len() > 1 {
+                return Err(ToolError::TargetNotFound {
+                    closest_match: Some(format!(
+                        "old_str matches {} times; str_replace requires exactly one",
+                        matches.len()
+                    )),
+                });
+            }
+            let new_body = body.replacen(&old_str, &new_str, 1);
+            tokio::fs::write(path, &new_body)
+                .await
+                .map_err(|e| ToolError::Io {
+                    path: path_str.clone(),
+                    error: e.to_string(),
+                })?;
+            // Snippet: ±4 lines around the change start.
+            let before_lines = body[..matches[0].0].lines().count();
+            let snippet = snippet_around(
+                &new_body,
+                before_lines.saturating_sub(3),
+                before_lines + new_str.lines().count() + 4,
+            );
+            Ok(TextEditorEditResponse {
+                ok: true,
+                command: "str_replace".into(),
+                snippet,
+                warnings,
+            })
+        }
+        "insert" => {
+            let insert_line = args.insert_line.unwrap_or(0).max(0) as usize;
+            let insert_text = args.insert_text.unwrap_or_default();
+            let body = tokio::fs::read_to_string(path)
+                .await
+                .map_err(|e| ToolError::Io {
+                    path: path_str.clone(),
+                    error: e.to_string(),
+                })?;
+            let mut lines: Vec<&str> = body.split_inclusive('\n').collect();
+            let pos = insert_line.min(lines.len());
+            let mut to_insert = insert_text.clone();
+            if !to_insert.ends_with('\n') {
+                to_insert.push('\n');
+            }
+            lines.insert(pos, to_insert.as_str());
+            let new_body: String = lines.concat();
+            tokio::fs::write(path, &new_body)
+                .await
+                .map_err(|e| ToolError::Io {
+                    path: path_str.clone(),
+                    error: e.to_string(),
+                })?;
+            let snippet = snippet_around(
+                &new_body,
+                pos.saturating_sub(3),
+                pos + insert_text.lines().count() + 4,
+            );
+            Ok(TextEditorEditResponse {
+                ok: true,
+                command: "insert".into(),
+                snippet,
+                warnings,
+            })
+        }
+        other => Err(ToolError::UnsupportedRegion {
+            reason: format!("unknown text_editor.edit command: {other}"),
+        }),
+    }
+}
+
+fn snippet_around(body: &str, start: usize, end: usize) -> String {
+    let lines: Vec<&str> = body.lines().collect();
+    let start = start.min(lines.len());
+    let end = end.min(lines.len());
+    let mut out = String::new();
+    for (i, line) in lines.iter().enumerate().skip(start).take(end - start) {
+        out.push_str(&format!("{}\t{}\n", i + 1, line));
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn snippet_around_basic() {
+        let body = "a\nb\nc\nd\ne";
+        let snip = snippet_around(body, 1, 4);
+        assert!(snip.contains("2\tb"));
+        assert!(snip.contains("4\td"));
+    }
 }

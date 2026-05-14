@@ -72,7 +72,10 @@ pub struct WindowControlArgs {
 }
 
 #[derive(Debug, Default, Serialize, JsonSchema)]
-pub struct WindowControlResponse {}
+#[serde(rename_all = "snake_case")]
+pub struct WindowControlResponse {
+    pub ok: bool,
+}
 
 pub async fn window_query(
     state: &KdeMcp,
@@ -235,10 +238,64 @@ pub(crate) const JS_LIST_ALL: &str = r#"
 "#;
 
 pub async fn window_control(
-    _state: &KdeMcp,
-    _args: WindowControlArgs,
+    state: &KdeMcp,
+    args: WindowControlArgs,
 ) -> Result<WindowControlResponse, ToolError> {
-    Err(ToolError::NotImplemented)
+    // Resolve our opaque ref → KWin internalId UUID.
+    let meta = state
+        .refs
+        .resolve(&args.window_ref)
+        .await
+        .map_err(|_| ToolError::StaleHandle {
+            ref_id: args.window_ref.clone(),
+        })?;
+    if meta.kind != crate::refs::RefKind::Window {
+        return Err(ToolError::UnsupportedRegion {
+            reason: format!("ref {} is not a window", args.window_ref),
+        });
+    }
+    let kwin_uuid = meta.payload.clone();
+
+    // Policy gate.
+    let target_class = crate::policy_target::class_for_window_uuid(state, &kwin_uuid).await?;
+    let _policy_warnings = state
+        .policy
+        .check(
+            crate::policy_target::to_target(target_class),
+            crate::policy::Action::Generic,
+        )
+        .await?;
+
+    let action = args.action.to_ascii_lowercase();
+    let body = match action.as_str() {
+        "focus" => format!(
+            r#"var ws = workspace; var list = ws.windowList(); for (var i=0;i<list.length;i++) {{ if (list[i].internalId && list[i].internalId.toString() === "{kwin_uuid}") {{ ws.activeWindow = list[i]; break; }} }} return {{ok: true}};"#
+        ),
+        "minimize" => format!(
+            r#"var ws = workspace; var list = ws.windowList(); for (var i=0;i<list.length;i++) {{ if (list[i].internalId && list[i].internalId.toString() === "{kwin_uuid}") {{ list[i].minimized = true; break; }} }} return {{ok: true}};"#
+        ),
+        "maximize" => format!(
+            r#"var ws = workspace; var list = ws.windowList(); for (var i=0;i<list.length;i++) {{ if (list[i].internalId && list[i].internalId.toString() === "{kwin_uuid}") {{ list[i].setMaximize(true, true); break; }} }} return {{ok: true}};"#
+        ),
+        "restore" => format!(
+            r#"var ws = workspace; var list = ws.windowList(); for (var i=0;i<list.length;i++) {{ if (list[i].internalId && list[i].internalId.toString() === "{kwin_uuid}") {{ list[i].minimized = false; list[i].setMaximize(false, false); break; }} }} return {{ok: true}};"#
+        ),
+        "close" => format!(
+            r#"var ws = workspace; var list = ws.windowList(); for (var i=0;i<list.length;i++) {{ if (list[i].internalId && list[i].internalId.toString() === "{kwin_uuid}") {{ list[i].closeWindow(); break; }} }} return {{ok: true}};"#
+        ),
+        other => {
+            return Err(ToolError::UnsupportedRegion {
+                reason: format!("unknown window_control action: {other}"),
+            });
+        }
+    };
+    let _ = crate::kwin::scripting::run_script(
+        &state.bus,
+        &body,
+        std::time::Duration::from_secs(2),
+    )
+    .await?;
+    Ok(WindowControlResponse { ok: true })
 }
 
 #[cfg(test)]
