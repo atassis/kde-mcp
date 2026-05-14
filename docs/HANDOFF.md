@@ -14,30 +14,29 @@ git tag -l                # phase-0 should be present (phase-1 not yet tagged)
 cargo test --workspace    # 57 tests; should all pass in <5 s after build
 ```
 
-Phase 1 is **code-complete; awaits live smoke + tag.** All 14 plan tasks have their code merged (some with deliberate first-cut scope: `inspect target=focused/window:<ref>` returns `not_implemented`; `observe.focused_element` is always null with a warning). Live verification against the user's real KDE session is the only remaining step before tagging `phase-1`.
+**Phase 1 complete and tagged.** All 14 plan tasks merged and live-smoked against the dev machine's KDE Plasma 6 session. 5 read-only tools (text_editor.view, clipboard_read, window_query, screenshot, observe) verified end-to-end; 3 first-cut deferrals (`inspect target=focused`, `inspect target=window:<ref>`, `observe.focused_element`) lift in Phase 4.
 
 **Immediate next action when atassis returns:**
 
-1. **Run the live smoke procedure** in `tests/integration/SMOKE.md` §C (7 fixtures covering text_editor.view, clipboard_read, window_query, screenshot, observe, inspect, audit). Each `cargo run --release -- --mode=live` invocation fires the "Claude is using your computer" KDE notification, which is why this was deferred. Copy "kde-mcp test" into the clipboard before C.2 (`clipboard_read`).
-2. If anything is red, debug + commit fix.
-3. If green: `git tag phase-1`. Phase 1 done.
-4. Pick a path for Phase 2 (input emulation via libei — the EIS prober already de-risked this; spec §14 row 2 has the scope).
+1. **Decide on the generalization refactor.** `docs/research/2026-05-14-generalization-paths.md` argues for extracting a `CompositorBackend` trait *before* Phase 2 (input emulation), because the cost grows fast as more tools are added. The refactor is ~400 LOC, all mechanical, no behavioural drift. Adding an X11 backend later becomes a single ~1000 LOC PR. If you take the refactor: write ADR-0009 superseding ADR-0002 first, then refactor, then start Phase 2 on top of the new trait.
+2. **OR skip and start Phase 2 directly** (input emulation via libei). Spec §14 row 2 has the scope. The EIS keystroke prober at `examples/eis-keystroke-prober/` already de-risks the load-bearing primitive.
 
-**Background context the user may want to revisit:**
+**Background context worth revisiting:**
 
-- `docs/plans/2026-05-14-phase-1-readonly-tools.md` §"Pre-plan caveats" — the one design relabel (HANDOFF's "write-to-temp-file" → kdotool-style caller-hosted D-Bus receiver, because KWin's QJSEngine has no file I/O). Implementation is ~60 LoC at `src/kwin/scripting.rs`.
-- The 3 first-cut deferrals (`inspect target=focused`, `inspect target=window:`, `observe.focused_element`) are recorded in HANDOFF below and in `tests/integration/SMOKE.md` §"Known not-yet-implemented". They lift in Phase 4.
+- `docs/research/2026-05-14-generalization-paths.md` — the analysis of "what's KDE-specific" vs "what's Linux-generic" in current code. Surprise: most of Phase 1 is already portable.
+- `docs/plans/2026-05-14-phase-1-readonly-tools.md` §"Pre-plan caveats" — the kdotool-style caller-hosted D-Bus receiver pattern at `src/kwin/scripting.rs` (HANDOFF's earlier "write-to-temp-file" label was misleading; the implementation matches kdotool's mechanism, ~60 LOC).
 
 ---
 
-## Current status (2026-05-14, evening)
+## Current status (2026-05-14, end of day)
 
-- **Phase:** **Phase 1 code-complete; live smoke + tag pending.**
-- **Last commit:** `f503bc6 docs(phase-1): SMOKE.md §C live read-only fixtures + minor observe fix`.
-- **Tag:** `phase-0` (local; not pushed). `phase-1` not yet tagged (waiting on live smoke green).
-- **Branch:** `main` (single branch; no remote configured).
+- **Phase:** **Phase 1 complete + tagged.** Live smoke C.1–C.5 + audit green.
+- **Last commit:** `9857115 docs(research): generalization paths analysis`.
+- **Tags:** `phase-0`, `phase-1` (both local; no remote configured).
+- **Branch:** `main`.
 - **Working tree:** clean.
 - **Tests:** 64 passing (40 unit + 24 integration). `cargo fmt` clean, `cargo clippy --workspace --all-targets -- -D warnings` clean.
+- **`.desktop` install:** the dev `kde-mcp.desktop` at `~/.local/share/applications/` points to `target/release/kde-mcp` so KApplicationTrader authorises ScreenShot2. If you move the binary, re-run the templated install (or `cargo install --path . --root ~/.local` then update the `Exec=` line).
 
 ### Phase 1 progress
 
@@ -57,7 +56,7 @@ Phase 1 is **code-complete; awaits live smoke + tag.** All 14 plan tasks have th
 | 11 — AT-SPI infra | Done | `src/atspi/{connection,tree,ref_encoding}.rs`. BFS walker with best-effort per-node fetches (role + name core; bbox/actions/value peripheral via `Proxies` extension). 5 ref_encoding unit tests. **Untested live.** |
 | 12 — inspect | Done | `target="element:<ref>"` walks via Task 11. `target="focused"` and `target="window:<ref>"` return `not_implemented` per spec deferrals to Phase 4. **Untested live.** |
 | 13 — observe | Done | Composes KWin script (cursor, focused window, windows, screens) with `focused_element: null + warning` per first cut. 2 offline shape-parity tests. **Untested live.** |
-| 14 — verify + tag | **Pending** | Live smoke `SMOKE.md` §C (7 fixtures) + `git tag phase-1`. The smoke is gated on user availability — each `--mode=live` run fires the KDE notification. |
+| 14 — verify + tag | Done | All 7 §C fixtures ran green after a 3-bug fix-pass (`fix(phase-1): three live-smoke bugs`, commit `3b6d74f`): zbus wire-name overrides for camelCase KWin methods, concurrent pipe-read for ScreenShot2, BGRA→RGBA decode of QImage raw pixels. `git tag phase-1` placed. |
 
 ### What's been verified
 
