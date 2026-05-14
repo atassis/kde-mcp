@@ -55,6 +55,34 @@ pub async fn class_at_coord(state: &KdeMcp, x: i32, y: i32) -> Result<Option<Str
         .map(|s| s.to_string()))
 }
 
+/// Returns the pid of the window owning the given window-UUID, used by
+/// `inspect target=window:<ref>` to map window → AT-SPI application.
+pub async fn pid_for_window_uuid(
+    state: &KdeMcp,
+    raw_uuid: &str,
+) -> Result<Option<i64>, ToolError> {
+    let body = format!(
+        r#"
+        var ws = workspace;
+        var found = null;
+        var list = ws.windowList();
+        for (var i = 0; i < list.length; i++) {{
+            if (list[i].internalId && list[i].internalId.toString() === "{raw_uuid}") {{
+                found = list[i];
+                break;
+            }}
+        }}
+        return {{ pid: found ? found.pid : -1 }};
+        "#
+    );
+    let payload = run_script(&state.bus, &body, Duration::from_secs(2)).await?;
+    let v: serde_json::Value =
+        serde_json::from_str(&payload).map_err(|e| ToolError::ExternalCommandFailed {
+            stderr: format!("pid_for_window_uuid JSON parse: {e}"),
+        })?;
+    Ok(v.get("pid").and_then(|p| p.as_i64()).filter(|p| *p > 0))
+}
+
 /// Returns the class of the window owning the given window-UUID. If
 /// `window_uuid` is a stored opaque ref, resolve it first.
 pub async fn class_for_window_uuid(

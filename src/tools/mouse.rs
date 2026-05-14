@@ -15,7 +15,7 @@ const BTN_MIDDLE: u32 = 0x112;
 #[derive(Debug, Deserialize, JsonSchema, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub struct MouseArgs {
-    /// "click" | "move" | "drag" | "scroll"
+    /// "click" | "move" | "drag" | "scroll" | "down" | "up" | "hold"
     pub action: String,
     #[serde(default)]
     pub coordinate: Option<[i32; 2]>,
@@ -27,8 +27,8 @@ pub struct MouseArgs {
     /// 1 (default), 2 = double-click, 3 = triple-click.
     #[serde(default)]
     pub count: Option<u32>,
-    /// ctrl / shift / alt / super (deferred to Phase 6 — pointer+keyboard
-    /// session combination).
+    /// ctrl / shift / alt / super — applied around the click via a
+    /// combined keyboard+pointer EIS session.
     #[serde(default)]
     pub modifier: Option<Vec<String>>,
     /// "up" | "down" | "left" | "right" (for action="scroll")
@@ -36,6 +36,10 @@ pub struct MouseArgs {
     pub scroll_direction: Option<String>,
     #[serde(default)]
     pub scroll_amount: Option<i32>,
+    /// For action="hold" — how long to hold the button down before
+    /// releasing. Default 200ms if omitted.
+    #[serde(default)]
+    pub duration_ms: Option<u64>,
 }
 
 #[derive(Debug, Default, Serialize, JsonSchema)]
@@ -50,13 +54,6 @@ pub async fn mouse(state: &KdeMcp, args: MouseArgs) -> Result<MouseResponse, Too
     let action = args.action.to_ascii_lowercase();
     let button = parse_button(args.button.as_deref().unwrap_or("left"))?;
     let modifiers = parse_modifiers(args.modifier.as_deref().unwrap_or(&[]))?;
-    if !modifiers.is_empty() {
-        return Err(ToolError::UnsupportedRegion {
-            reason:
-                "mouse modifier keys require keyboard+pointer session combine; deferred to Phase 6"
-                    .into(),
-        });
-    }
 
     // Policy gate (spec §6.0): target app = window at click coord (or active
     // window if no coord). Sentinel warnings propagate into the response.
@@ -70,7 +67,14 @@ pub async fn mouse(state: &KdeMcp, args: MouseArgs) -> Result<MouseResponse, Too
         .check(target, crate::policy::Action::Generic)
         .await?;
 
-    let session = EisSession::open(&state.bus, CAP_POINTER, false, true).await?;
+    // If modifiers are requested, open a combined keyboard+pointer session.
+    // Press modifiers before, release after.
+    let caps = if modifiers.is_empty() {
+        CAP_POINTER
+    } else {
+        crate::kwin::eis::CAP_KEYBOARD | CAP_POINTER
+    };
+    let session = EisSession::open(&state.bus, caps, !modifiers.is_empty(), true).await?;
     let device = session.device.device().clone();
     let pointer_abs: ei::PointerAbsolute = session
         .device
@@ -94,6 +98,36 @@ pub async fn mouse(state: &KdeMcp, args: MouseArgs) -> Result<MouseResponse, Too
     device.start_emulating(session.last_serial, 0);
     session.flush()?;
 
+    // Pre-press modifiers via the keyboard aux device (if requested).
+    let keyboard_iface = if !modifiers.is_empty() {
+        let kdev = session.keyboard_device.as_ref().cloned().ok_or_else(|| {
+            ToolError::InputDispatchFailed {
+                detail: "modifier+click requested but no keyboard device materialised".into(),
+                libei_version: None,
+                kwin_version: None,
+            }
+        })?;
+        let kdev_inner = kdev.device().clone();
+        let kb = kdev.interface::<ei::Keyboard>().ok_or_else(|| {
+            ToolError::InputDispatchFailed {
+                detail: "keyboard aux device missing Keyboard interface".into(),
+                libei_version: None,
+                kwin_version: None,
+            }
+        })?;
+        kdev_inner.start_emulating(session.last_serial, 0);
+        session.flush()?;
+        for m in &modifiers {
+            kb.key(m.keycode(), ei::keyboard::KeyState::Press);
+            kdev_inner.frame(session.last_serial, EisSession::now_us());
+            session.flush()?;
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        Some((kdev_inner, kb))
+    } else {
+        None
+    };
+
     let outcome = run_mouse_action(
         &action,
         &session,
@@ -107,8 +141,20 @@ pub async fn mouse(state: &KdeMcp, args: MouseArgs) -> Result<MouseResponse, Too
         args.count.unwrap_or(1),
         args.scroll_direction.as_deref(),
         args.scroll_amount.unwrap_or(3),
+        args.duration_ms.unwrap_or(200),
     )
     .await;
+
+    // Release modifiers in reverse order.
+    if let Some((kdev_inner, kb)) = keyboard_iface {
+        for m in modifiers.iter().rev() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            kb.key(m.keycode(), ei::keyboard::KeyState::Released);
+            kdev_inner.frame(session.last_serial, EisSession::now_us());
+            session.flush()?;
+        }
+        kdev_inner.stop_emulating(session.last_serial);
+    }
 
     device.stop_emulating(session.last_serial);
     let _ = session.context.flush();
@@ -133,6 +179,7 @@ async fn run_mouse_action(
     count: u32,
     scroll_dir: Option<&str>,
     scroll_amount: i32,
+    hold_duration_ms: u64,
 ) -> Result<(), ToolError> {
     match action {
         "move" => {
@@ -218,6 +265,38 @@ async fn run_mouse_action(
                 }
             };
             scroll.scroll(dx, dy);
+            device.frame(session.last_serial, EisSession::now_us());
+            session.flush()?;
+        }
+        "down" => {
+            if let Some([x, y]) = coord {
+                pointer_abs.motion_absolute(x as f32, y as f32);
+                device.frame(session.last_serial, EisSession::now_us());
+                session.flush()?;
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            button_iface.button(button, ei::button::ButtonState::Press);
+            device.frame(session.last_serial, EisSession::now_us());
+            session.flush()?;
+        }
+        "up" => {
+            button_iface.button(button, ei::button::ButtonState::Released);
+            device.frame(session.last_serial, EisSession::now_us());
+            session.flush()?;
+        }
+        "hold" => {
+            let [x, y] = coord.ok_or_else(|| ToolError::UnsupportedRegion {
+                reason: "coordinate required for hold".into(),
+            })?;
+            pointer_abs.motion_absolute(x as f32, y as f32);
+            device.frame(session.last_serial, EisSession::now_us());
+            session.flush()?;
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            button_iface.button(button, ei::button::ButtonState::Press);
+            device.frame(session.last_serial, EisSession::now_us());
+            session.flush()?;
+            tokio::time::sleep(Duration::from_millis(hold_duration_ms)).await;
+            button_iface.button(button, ei::button::ButtonState::Released);
             device.frame(session.last_serial, EisSession::now_us());
             session.flush()?;
         }

@@ -25,6 +25,10 @@ pub struct KeyboardTypeArgs {
 #[serde(rename_all = "snake_case")]
 pub struct KeyboardKeyArgs {
     pub keys: String,
+    /// If present, hold the chord for this many ms before releasing.
+    /// Default: brief press + release as before.
+    #[serde(default)]
+    pub hold_ms: Option<u64>,
 }
 
 #[derive(Debug, Default, Serialize, JsonSchema)]
@@ -153,7 +157,8 @@ pub async fn keyboard_key(
     kb.key(chord.key, ei::keyboard::KeyState::Press);
     device.frame(session.last_serial, EisSession::now_us());
     session.flush()?;
-    tokio::time::sleep(Duration::from_millis(30)).await;
+    let hold_ms = args.hold_ms.unwrap_or(30);
+    tokio::time::sleep(Duration::from_millis(hold_ms)).await;
     kb.key(chord.key, ei::keyboard::KeyState::Released);
     device.frame(session.last_serial, EisSession::now_us());
     session.flush()?;

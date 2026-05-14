@@ -78,7 +78,14 @@ pub fn default_path() -> PathBuf {
     PathBuf::from("/tmp/kde-mcp/audit.jsonl")
 }
 
+/// Rotate the audit log when it reaches this size (spec §9: "rotated at
+/// 50 MB; keep 5"). Pre-write check; rotation moves the current file to
+/// `.1`, shifting `.1` → `.2`, etc., dropping `.5`.
+const ROTATE_BYTES: u64 = 50 * 1024 * 1024;
+const ROTATE_KEEP: usize = 5;
+
 pub struct AuditLog {
+    path: PathBuf,
     file: Mutex<File>,
 }
 
@@ -93,6 +100,7 @@ impl AuditLog {
             .open(path)
             .await?;
         Ok(Self {
+            path: path.to_path_buf(),
             file: Mutex::new(file),
         })
     }
@@ -104,8 +112,42 @@ impl AuditLog {
         let mut line = serde_json::to_string(&rec).map_err(std::io::Error::other)?;
         line.push('\n');
         let mut f = self.file.lock().await;
+        // Pre-write rotation check. Cheap: stat the open fd via metadata.
+        if let Ok(meta) = f.metadata().await
+            && meta.len() + line.len() as u64 > ROTATE_BYTES
+        {
+            drop(f);
+            self.rotate().await?;
+            f = self.file.lock().await;
+            // After rotate(), file is replaced; reopen the handle.
+            *f = OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&self.path)
+                .await?;
+        }
         f.write_all(line.as_bytes()).await?;
         f.flush().await
+    }
+
+    async fn rotate(&self) -> std::io::Result<()> {
+        // Shift .ROTATE_KEEP → drop; .N → .N+1 for N in (0..KEEP-1).
+        for i in (0..ROTATE_KEEP).rev() {
+            let from = if i == 0 {
+                self.path.clone()
+            } else {
+                self.path.with_extension(format!("jsonl.{i}"))
+            };
+            let to = self.path.with_extension(format!("jsonl.{}", i + 1));
+            if i + 1 > ROTATE_KEEP {
+                let _ = tokio::fs::remove_file(&from).await;
+                continue;
+            }
+            if tokio::fs::metadata(&from).await.is_ok() {
+                let _ = tokio::fs::rename(&from, &to).await;
+            }
+        }
+        Ok(())
     }
 }
 

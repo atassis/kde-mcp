@@ -160,11 +160,62 @@ pub struct PolicyGate {
     cancel: CancellationToken,
 }
 
+/// Persistent approval store: only `Session` decisions get written; `Once`
+/// is by design ephemeral, and `Denied` we don't persist because the user
+/// can withdraw a one-off deny by just re-approving next time. Path:
+/// `~/.local/state/kde-mcp/approvals.json`.
+fn approvals_path() -> PathBuf {
+    if let Some(state) = std::env::var_os("XDG_STATE_HOME") {
+        return PathBuf::from(state).join("kde-mcp/approvals.json");
+    }
+    if let Some(home) = std::env::var_os("HOME") {
+        return PathBuf::from(home).join(".local/state/kde-mcp/approvals.json");
+    }
+    PathBuf::from("/tmp/kde-mcp-approvals.json")
+}
+
+fn load_persistent_approvals() -> HashMap<String, ApprovalState> {
+    let path = approvals_path();
+    let body = match std::fs::read_to_string(&path) {
+        Ok(b) => b,
+        Err(_) => return HashMap::new(),
+    };
+    // File schema: { "approvals": ["class1", "class2", ...] }
+    let v: serde_json::Value = match serde_json::from_str(&body) {
+        Ok(v) => v,
+        Err(_) => return HashMap::new(),
+    };
+    let mut out = HashMap::new();
+    if let Some(arr) = v.get("approvals").and_then(|a| a.as_array()) {
+        for entry in arr.iter().filter_map(|x| x.as_str()) {
+            out.insert(entry.to_string(), ApprovalState::Session);
+        }
+    }
+    out
+}
+
+fn save_persistent_approvals(approvals: &HashMap<String, ApprovalState>) {
+    let path = approvals_path();
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    // Only persist Session approvals; Once is ephemeral, Pending is in-flight,
+    // Denied is best left to re-prompt on next process start.
+    let persisted: Vec<&str> = approvals
+        .iter()
+        .filter(|(_, s)| matches!(s, ApprovalState::Session))
+        .map(|(k, _)| k.as_str())
+        .collect();
+    let body = serde_json::json!({"approvals": persisted});
+    let _ = std::fs::write(&path, body.to_string());
+}
+
 impl PolicyGate {
     pub fn new(config: PolicyConfig, cancel: CancellationToken) -> Self {
+        let approvals = load_persistent_approvals();
         Self {
             config,
-            approvals: Mutex::new(HashMap::new()),
+            approvals: Mutex::new(approvals),
             cancel,
         }
     }
@@ -276,6 +327,7 @@ impl PolicyGate {
             }
             ApprovalDecision::Session => {
                 approvals.insert(app_class.into(), ApprovalState::Session);
+                save_persistent_approvals(&approvals);
             }
             ApprovalDecision::Deny => {
                 approvals.insert(app_class.into(), ApprovalState::Denied);

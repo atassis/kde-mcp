@@ -45,6 +45,11 @@ trait RemoteDesktop {
 pub struct EisSession {
     pub context: ei::Context,
     pub device: reis::event::Device,
+    /// Set when the session was opened with both keyboard and pointer caps
+    /// and KWin produced separate devices for each. The primary `device`
+    /// above is the *pointer*-bearing device in the combined case; this
+    /// field holds the keyboard sibling. Used by `mouse modifier+click`.
+    pub keyboard_device: Option<reis::event::Device>,
     pub last_serial: u32,
 }
 
@@ -99,10 +104,11 @@ impl EisSession {
             kwin_version: None,
         })?;
 
-        let (context, device, last_serial) = join?;
+        let (context, device, keyboard_device, last_serial) = join?;
         Ok(EisSession {
             context,
             device,
+            keyboard_device,
             last_serial,
         })
     }
@@ -130,7 +136,15 @@ async fn handshake_and_wait_for_device(
     raw_fd: std::os::fd::RawFd,
     expect_keyboard: bool,
     expect_pointer: bool,
-) -> Result<(ei::Context, reis::event::Device, u32), ToolError> {
+) -> Result<
+    (
+        ei::Context,
+        reis::event::Device,
+        Option<reis::event::Device>,
+        u32,
+    ),
+    ToolError,
+> {
     let stream = unsafe { UnixStream::from_raw_fd(raw_fd) };
     stream.set_nonblocking(true).map_err(|e| ToolError::Io {
         path: "eis stream".into(),
@@ -151,7 +165,12 @@ async fn handshake_and_wait_for_device(
         })?;
 
     let mut chosen_dev: Option<reis::event::Device> = None;
+    let mut keyboard_aux: Option<reis::event::Device> = None;
     let mut last_serial: u32 = 0;
+    // Combined session: we expect TWO DeviceAdded events. Keep collecting
+    // until both arrive (or timeout). Single-cap sessions break on first
+    // matching Resumed as before.
+    let combined = expect_keyboard && expect_pointer;
     let deadline = Instant::now() + Duration::from_secs(3);
     loop {
         let remaining = deadline.saturating_duration_since(Instant::now());
@@ -192,15 +211,29 @@ async fn handshake_and_wait_for_device(
                 let has_kb = evt.device.has_capability(DeviceCapability::Keyboard);
                 let has_ptr = evt.device.has_capability(DeviceCapability::PointerAbsolute)
                     && evt.device.has_capability(DeviceCapability::Button);
-                let match_kb = expect_keyboard && has_kb;
-                let match_ptr = expect_pointer && has_ptr;
-                if match_kb || match_ptr {
-                    chosen_dev = Some(evt.device.clone());
+                if combined {
+                    // Pointer device is the primary; keyboard is the aux.
+                    if has_ptr && chosen_dev.is_none() {
+                        chosen_dev = Some(evt.device.clone());
+                    } else if has_kb && keyboard_aux.is_none() {
+                        keyboard_aux = Some(evt.device.clone());
+                    }
+                } else {
+                    let match_kb = expect_keyboard && has_kb;
+                    let match_ptr = expect_pointer && has_ptr;
+                    if match_kb || match_ptr {
+                        chosen_dev = Some(evt.device.clone());
+                    }
                 }
             }
             reis::event::EiEvent::DeviceResumed(evt) => {
                 last_serial = evt.serial;
-                if chosen_dev.is_some() {
+                let ready = if combined {
+                    chosen_dev.is_some() && keyboard_aux.is_some()
+                } else {
+                    chosen_dev.is_some()
+                };
+                if ready {
                     break;
                 }
             }
@@ -213,5 +246,5 @@ async fn handshake_and_wait_for_device(
         libei_version: None,
         kwin_version: None,
     })?;
-    Ok((context, device, last_serial))
+    Ok((context, device, keyboard_aux, last_serial))
 }
