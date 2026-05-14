@@ -136,10 +136,7 @@ async fn poll_screen_change(
         // Count pixels that differ by >16 in any channel. Fast enough at
         // 5 fps for typical 2K displays (~4M px × 4 byte cmp).
         let mut diff = 0u64;
-        for (a, b) in initial_rgba
-            .pixels()
-            .zip(frame_rgba.pixels())
-        {
+        for (a, b) in initial_rgba.pixels().zip(frame_rgba.pixels()) {
             if (a[0] as i32 - b[0] as i32).abs() > 16
                 || (a[1] as i32 - b[1] as i32).abs() > 16
                 || (a[2] as i32 - b[2] as i32).abs() > 16
@@ -232,9 +229,7 @@ async fn scan_for_element(
         let count = node.child_count().await.unwrap_or(0);
         for i in 0..count {
             if let Ok(child_ref) = node.get_child_at_index(i).await
-                && let Ok(child) = child_ref
-                    .into_accessible_proxy(conn.connection())
-                    .await
+                && let Ok(child) = child_ref.into_accessible_proxy(conn.connection()).await
             {
                 queue.push_back(child);
             }

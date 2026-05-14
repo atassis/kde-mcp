@@ -120,9 +120,11 @@ pub async fn window_query(
     match action.as_str() {
         "list" => { /* no extra filter */ }
         "get_geometry" => {
-            let ref_id = args.window_uuid.ok_or_else(|| ToolError::UnsupportedRegion {
-                reason: "window_uuid required for action=get_geometry".into(),
-            })?;
+            let ref_id = args
+                .window_uuid
+                .ok_or_else(|| ToolError::UnsupportedRegion {
+                    reason: "window_uuid required for action=get_geometry".into(),
+                })?;
             entries.retain(|e| e.uuid == ref_id);
             if entries.is_empty() {
                 return Err(ToolError::TargetNotFound {

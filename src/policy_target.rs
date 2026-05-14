@@ -57,10 +57,7 @@ pub async fn class_at_coord(state: &KdeMcp, x: i32, y: i32) -> Result<Option<Str
 
 /// Returns the pid of the window owning the given window-UUID, used by
 /// `inspect target=window:<ref>` to map window → AT-SPI application.
-pub async fn pid_for_window_uuid(
-    state: &KdeMcp,
-    raw_uuid: &str,
-) -> Result<Option<i64>, ToolError> {
+pub async fn pid_for_window_uuid(state: &KdeMcp, raw_uuid: &str) -> Result<Option<i64>, ToolError> {
     let body = format!(
         r#"
         var ws = workspace;

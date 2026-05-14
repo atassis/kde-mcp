@@ -108,13 +108,13 @@ pub async fn mouse(state: &KdeMcp, args: MouseArgs) -> Result<MouseResponse, Too
             }
         })?;
         let kdev_inner = kdev.device().clone();
-        let kb = kdev.interface::<ei::Keyboard>().ok_or_else(|| {
-            ToolError::InputDispatchFailed {
-                detail: "keyboard aux device missing Keyboard interface".into(),
-                libei_version: None,
-                kwin_version: None,
-            }
-        })?;
+        let kb =
+            kdev.interface::<ei::Keyboard>()
+                .ok_or_else(|| ToolError::InputDispatchFailed {
+                    detail: "keyboard aux device missing Keyboard interface".into(),
+                    libei_version: None,
+                    kwin_version: None,
+                })?;
         kdev_inner.start_emulating(session.last_serial, 0);
         session.flush()?;
         for m in &modifiers {

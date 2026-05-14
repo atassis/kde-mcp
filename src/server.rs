@@ -84,10 +84,12 @@ impl KdeMcp {
         let audit = self.audit.clone();
         let mode = self.mode.as_str();
         let tray = self.tray.clone();
-        Ok(dispatch_audited(audit, tray, mode, "observe", v, async move {
-            tools::observe::observe(self, args).await
-        })
-        .await)
+        Ok(
+            dispatch_audited(audit, tray, mode, "observe", v, async move {
+                tools::observe::observe(self, args).await
+            })
+            .await,
+        )
     }
 
     #[tool(
@@ -102,10 +104,12 @@ impl KdeMcp {
         let audit = self.audit.clone();
         let mode = self.mode.as_str();
         let tray = self.tray.clone();
-        Ok(dispatch_audited(audit, tray, mode, "inspect", v, async move {
-            tools::inspect::inspect(self, args).await
-        })
-        .await)
+        Ok(
+            dispatch_audited(audit, tray, mode, "inspect", v, async move {
+                tools::inspect::inspect(self, args).await
+            })
+            .await,
+        )
     }
 
     #[tool(
@@ -120,10 +124,12 @@ impl KdeMcp {
         let audit = self.audit.clone();
         let mode = self.mode.as_str();
         let tray = self.tray.clone();
-        Ok(dispatch_audited(audit, tray, mode, "screenshot", v, async move {
-            tools::screenshot::screenshot(self, args).await
-        })
-        .await)
+        Ok(
+            dispatch_audited(audit, tray, mode, "screenshot", v, async move {
+                tools::screenshot::screenshot(self, args).await
+            })
+            .await,
+        )
     }
 
     #[tool(
@@ -138,10 +144,12 @@ impl KdeMcp {
         let audit = self.audit.clone();
         let mode = self.mode.as_str();
         let tray = self.tray.clone();
-        Ok(dispatch_audited(audit, tray, mode, "read_text", v, async move {
-            tools::read_text::read_text(self, args).await
-        })
-        .await)
+        Ok(
+            dispatch_audited(audit, tray, mode, "read_text", v, async move {
+                tools::read_text::read_text(self, args).await
+            })
+            .await,
+        )
     }
 
     #[tool(

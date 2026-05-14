@@ -1,5 +1,4 @@
 use crate::atspi::ref_encoding::decode_element_ref;
-use std::time::Duration;
 use crate::error::ToolError;
 use crate::refs::{RefError, RefKind};
 use crate::server::KdeMcp;
@@ -9,6 +8,7 @@ use atspi::zbus::names::BusName;
 use atspi::zbus::zvariant::ObjectPath;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use std::time::Duration;
 
 #[derive(Debug, Deserialize, JsonSchema, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -176,7 +176,8 @@ async fn owning_class_for_element_ref(
         return {{ class: "" }};
         "#
     );
-    let resp = crate::kwin::scripting::run_script(&state.bus, &body, Duration::from_secs(2)).await?;
+    let resp =
+        crate::kwin::scripting::run_script(&state.bus, &body, Duration::from_secs(2)).await?;
     let v: serde_json::Value = serde_json::from_str(&resp).unwrap_or(serde_json::Value::Null);
     Ok(v.get("class")
         .and_then(|c| c.as_str())

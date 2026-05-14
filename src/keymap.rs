@@ -227,11 +227,8 @@ pub fn keycode_for_char_via_xkb(ch: char) -> Option<(u32, bool)> {
         None,
         xkbcommon::xkb::KEYMAP_COMPILE_NO_FLAGS,
     )?;
-    let target_keysym: u32 = xkbcommon::xkb::keysym_from_name(
-        &ch.to_string(),
-        xkbcommon::xkb::KEYSYM_NO_FLAGS,
-    )
-    .raw();
+    let target_keysym: u32 =
+        xkbcommon::xkb::keysym_from_name(&ch.to_string(), xkbcommon::xkb::KEYSYM_NO_FLAGS).raw();
     let sym = if target_keysym == xkbcommon::xkb::keysyms::KEY_NoSymbol {
         xkbcommon::xkb::utf32_to_keysym(ch as u32).raw()
     } else {

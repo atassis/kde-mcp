@@ -120,12 +120,12 @@ async fn atspi_focused_root(
 ) -> Result<AccessibleProxy<'_>, ToolError> {
     use atspi::State;
     use atspi::proxy::accessible::ObjectRefExt;
-    let root = conn
-        .root_accessible_on_registry()
-        .await
-        .map_err(|e| ToolError::BusDisconnected {
-            detail: format!("registry root: {e}"),
-        })?;
+    let root =
+        conn.root_accessible_on_registry()
+            .await
+            .map_err(|e| ToolError::BusDisconnected {
+                detail: format!("registry root: {e}"),
+            })?;
     let mut queue: std::collections::VecDeque<AccessibleProxy<'_>> =
         std::collections::VecDeque::new();
     queue.push_back(root);
@@ -143,9 +143,7 @@ async fn atspi_focused_root(
         let count = node.child_count().await.unwrap_or(0);
         for i in 0..count {
             if let Ok(child_ref) = node.get_child_at_index(i).await
-                && let Ok(child) = child_ref
-                    .into_accessible_proxy(conn.connection())
-                    .await
+                && let Ok(child) = child_ref.into_accessible_proxy(conn.connection()).await
             {
                 queue.push_back(child);
             }
@@ -165,12 +163,12 @@ async fn atspi_root_by_pid(
     pid: i64,
 ) -> Result<AccessibleProxy<'_>, ToolError> {
     use atspi::proxy::accessible::ObjectRefExt;
-    let root = conn
-        .root_accessible_on_registry()
-        .await
-        .map_err(|e| ToolError::BusDisconnected {
-            detail: format!("registry root: {e}"),
-        })?;
+    let root =
+        conn.root_accessible_on_registry()
+            .await
+            .map_err(|e| ToolError::BusDisconnected {
+                detail: format!("registry root: {e}"),
+            })?;
     let count = root.child_count().await.unwrap_or(0);
     for i in 0..count {
         let child_ref = match root.get_child_at_index(i).await {

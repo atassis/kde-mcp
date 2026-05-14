@@ -73,7 +73,11 @@ struct OcrOutcome {
     words: Option<Vec<RecognizedWord>>,
 }
 
-fn run_ocr(img: image::DynamicImage, lang: &str, want_bboxes: bool) -> Result<OcrOutcome, ToolError> {
+fn run_ocr(
+    img: image::DynamicImage,
+    lang: &str,
+    want_bboxes: bool,
+) -> Result<OcrOutcome, ToolError> {
     // Re-encode to PNG in memory; tesseract's set_image_from_mem accepts
     // any image format. We could also feed raw RGBA bytes via set_frame
     // but the PNG path is simpler and copes with the image crate's own
@@ -143,10 +147,7 @@ fn extract_words(ts: &mut tesseract::Tesseract) -> Result<Vec<RecognizedWord>, T
     Ok(out)
 }
 
-async fn resolve_region(
-    state: &KdeMcp,
-    raw: &serde_json::Value,
-) -> Result<Region, ToolError> {
+async fn resolve_region(state: &KdeMcp, raw: &serde_json::Value) -> Result<Region, ToolError> {
     if let Some(s) = raw.as_str() {
         match s {
             "active_screen" => Ok(Region::ActiveScreen),
