@@ -48,8 +48,18 @@ pub async fn keyboard_type(
         _ => args.text.chars().count() > 32 || !args.text.is_ascii(),
     };
 
+    // Policy gate — target = currently-focused window's class.
+    let target_class = crate::policy_target::focused_class(state).await?;
+    let target = crate::policy_target::to_target(target_class);
+    let policy_warnings = state
+        .policy
+        .check(target, crate::policy::Action::KeyboardType)
+        .await?;
+
     if needs_clipboard {
-        return type_via_clipboard(state, &args.text).await;
+        let mut resp = type_via_clipboard(state, &args.text).await?;
+        resp.warnings.extend(policy_warnings);
+        return Ok(resp);
     }
 
     let session = EisSession::open(&state.bus, CAP_KEYBOARD, true, false).await?;
@@ -96,7 +106,7 @@ pub async fn keyboard_type(
     let _ = session.context.flush();
     Ok(KeyboardResponse {
         ok: true,
-        warnings: vec![],
+        warnings: policy_warnings,
         used_clipboard: Some(false),
     })
 }
@@ -106,6 +116,19 @@ pub async fn keyboard_key(
     args: KeyboardKeyArgs,
 ) -> Result<KeyboardResponse, ToolError> {
     let chord = parse_chord(&args.keys)?;
+
+    // Policy gate — chord-aware so click_only tier can allow navigation.
+    let target_class = crate::policy_target::focused_class(state).await?;
+    let target = crate::policy_target::to_target(target_class);
+    let policy_warnings = state
+        .policy
+        .check(
+            target,
+            crate::policy::Action::KeyboardKey {
+                chord_is_navigation: crate::policy::chord_is_navigation(&chord),
+            },
+        )
+        .await?;
 
     let session = EisSession::open(&state.bus, CAP_KEYBOARD, true, false).await?;
     let device = session.device.device().clone();
@@ -145,7 +168,7 @@ pub async fn keyboard_key(
     let _ = session.context.flush();
     Ok(KeyboardResponse {
         ok: true,
-        warnings: vec![],
+        warnings: policy_warnings,
         used_clipboard: None,
     })
 }

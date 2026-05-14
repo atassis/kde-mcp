@@ -58,6 +58,18 @@ pub async fn mouse(state: &KdeMcp, args: MouseArgs) -> Result<MouseResponse, Too
         });
     }
 
+    // Policy gate (spec §6.0): target app = window at click coord (or active
+    // window if no coord). Sentinel warnings propagate into the response.
+    let target_class = match args.coordinate {
+        Some([x, y]) => crate::policy_target::class_at_coord(state, x, y).await?,
+        None => crate::policy_target::focused_class(state).await?,
+    };
+    let target = crate::policy_target::to_target(target_class);
+    let policy_warnings = state
+        .policy
+        .check(target, crate::policy::Action::Generic)
+        .await?;
+
     let session = EisSession::open(&state.bus, CAP_POINTER, false, true).await?;
     let device = session.device.device().clone();
     let pointer_abs: ei::PointerAbsolute = session
@@ -103,7 +115,7 @@ pub async fn mouse(state: &KdeMcp, args: MouseArgs) -> Result<MouseResponse, Too
 
     outcome.map(|_| MouseResponse {
         ok: true,
-        warnings: vec![],
+        warnings: policy_warnings,
     })
 }
 

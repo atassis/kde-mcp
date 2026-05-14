@@ -32,17 +32,44 @@ pub struct KdeMcp {
     pub audit: Arc<AuditLog>,
     pub bus: zbus::Connection,
     pub atspi: Arc<crate::atspi::connection::AtspiConnection>,
+    pub policy: crate::policy::SharedPolicyGate,
     pub tool_router: ToolRouter<KdeMcp>,
 }
 
 impl KdeMcp {
     pub fn new(mode: Mode, audit: Arc<AuditLog>, bus: zbus::Connection) -> Self {
+        let config = crate::policy::PolicyConfig::load_default().unwrap_or_default();
+        let policy = Arc::new(crate::policy::PolicyGate::new(
+            config,
+            tokio_util::sync::CancellationToken::new(),
+        ));
         Self {
             mode,
             refs: Arc::new(RefStore::new(Duration::from_secs(60))),
             audit,
             bus,
             atspi: Arc::new(crate::atspi::connection::AtspiConnection::default()),
+            policy,
+            tool_router: Self::tool_router(),
+        }
+    }
+
+    /// Variant used by `src/main.rs` to install the cancel-shortcut token.
+    pub fn new_with_cancel(
+        mode: Mode,
+        audit: Arc<AuditLog>,
+        bus: zbus::Connection,
+        cancel: tokio_util::sync::CancellationToken,
+    ) -> Self {
+        let config = crate::policy::PolicyConfig::load_default().unwrap_or_default();
+        let policy = Arc::new(crate::policy::PolicyGate::new(config, cancel));
+        Self {
+            mode,
+            refs: Arc::new(RefStore::new(Duration::from_secs(60))),
+            audit,
+            bus,
+            atspi: Arc::new(crate::atspi::connection::AtspiConnection::default()),
+            policy,
             tool_router: Self::tool_router(),
         }
     }

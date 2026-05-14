@@ -44,7 +44,10 @@ async fn main() -> Result<()> {
     );
     tracing::info!(audit = %audit_path.display(), "audit log open");
 
-    let server = KdeMcp::new(cli.mode, audit_log, bootstrapped.bus);
+    // Install the Meta+Esc cancel token (currently SIGUSR1 fallback; see
+    // src/cancel.rs for the KGlobalAccel roadmap).
+    let cancel = kde_mcp::cancel::install(&bootstrapped.bus).await;
+    let server = KdeMcp::new_with_cancel(cli.mode, audit_log, bootstrapped.bus, cancel);
 
     eprintln!("kde-mcp: ready (mode={mode_name})");
 

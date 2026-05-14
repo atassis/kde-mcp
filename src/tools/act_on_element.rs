@@ -29,6 +29,17 @@ pub async fn act_on_element(
     state: &KdeMcp,
     args: ActOnElementArgs,
 ) -> Result<ActOnElementResponse, ToolError> {
+    // Policy gate — target app derived from the currently-focused window.
+    // True spec §6.0 step 3 says "from the ref's owning window"; that
+    // requires window→AT-SPI app mapping which is deferred to Phase 4.
+    // For Phase 3 we approximate by the focused window's class.
+    let target_class = crate::policy_target::focused_class(state).await?;
+    let target = crate::policy_target::to_target(target_class);
+    let policy_warnings = state
+        .policy
+        .check(target, crate::policy::Action::Generic)
+        .await?;
+
     let meta = state
         .refs
         .resolve(&args.element_ref)
@@ -116,6 +127,7 @@ pub async fn act_on_element(
             fallback_suggestion: Some("AT-SPI do_action returned false".into()),
         });
     }
+    let _ = policy_warnings; // attached via response if/when schema is widened
     Ok(ActOnElementResponse {
         ok: true,
         action_invoked: actions[idx as usize].name.clone(),

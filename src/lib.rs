@@ -1,5 +1,6 @@
 pub mod atspi;
 pub mod audit;
+pub mod cancel;
 pub mod cli;
 pub mod error;
 pub mod keymap;
@@ -7,6 +8,8 @@ pub mod kwin;
 pub mod lock;
 pub mod mode;
 pub mod notify;
+pub mod policy;
+pub mod policy_target;
 pub mod refs;
 pub mod server;
 pub mod tools;
