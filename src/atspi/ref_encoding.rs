@@ -12,9 +12,7 @@ pub fn encode_element_ref(bus_name: &str, object_path: &str) -> String {
 }
 
 pub fn decode_element_ref(payload: &str) -> Option<(&str, &str)> {
-    let mut parts = payload.splitn(2, '|');
-    let bus = parts.next()?;
-    let path = parts.next()?;
+    let (bus, path) = payload.split_once('|')?;
     if bus.is_empty() || path.is_empty() {
         return None;
     }
