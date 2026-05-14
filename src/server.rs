@@ -239,7 +239,13 @@ impl ServerHandler for KdeMcp {
         ServerInfo::new(
             ServerCapabilities::builder().enable_tools().build(),
         )
-        .with_server_info(Implementation::from_build_env())
+        // from_build_env() reads the SDK's own metadata, not ours — use
+        // CARGO_PKG_NAME / CARGO_PKG_VERSION from the consuming crate so the
+        // wire reports kde-mcp/0.1.0, not rmcp/1.7.0.
+        .with_server_info(Implementation::new(
+            env!("CARGO_PKG_NAME"),
+            env!("CARGO_PKG_VERSION"),
+        ))
         .with_protocol_version(ProtocolVersion::V_2025_11_25)
         .with_instructions(
             "kde-mcp: KDE Plasma 6 / Wayland desktop control. \
