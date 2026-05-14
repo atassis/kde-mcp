@@ -24,7 +24,7 @@
 
 use crate::error::ToolError;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
@@ -158,6 +158,10 @@ pub struct PolicyGate {
     config: PolicyConfig,
     approvals: Mutex<HashMap<String, ApprovalState>>,
     cancel: CancellationToken,
+    /// Disk-backed Session-approval store. `None` for tests — keeps
+    /// approvals in-memory only so parallel tests don't contaminate
+    /// each other (or the user's real `~/.local/state/kde-mcp/`).
+    store_path: Option<PathBuf>,
 }
 
 /// Persistent approval store: only `Session` decisions get written; `Once`
@@ -174,9 +178,8 @@ fn approvals_path() -> PathBuf {
     PathBuf::from("/tmp/kde-mcp-approvals.json")
 }
 
-fn load_persistent_approvals() -> HashMap<String, ApprovalState> {
-    let path = approvals_path();
-    let body = match std::fs::read_to_string(&path) {
+fn load_persistent_approvals(path: &Path) -> HashMap<String, ApprovalState> {
+    let body = match std::fs::read_to_string(path) {
         Ok(b) => b,
         Err(_) => return HashMap::new(),
     };
@@ -194,8 +197,7 @@ fn load_persistent_approvals() -> HashMap<String, ApprovalState> {
     out
 }
 
-fn save_persistent_approvals(approvals: &HashMap<String, ApprovalState>) {
-    let path = approvals_path();
+fn save_persistent_approvals(path: &Path, approvals: &HashMap<String, ApprovalState>) {
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
@@ -207,16 +209,29 @@ fn save_persistent_approvals(approvals: &HashMap<String, ApprovalState>) {
         .map(|(k, _)| k.as_str())
         .collect();
     let body = serde_json::json!({"approvals": persisted});
-    let _ = std::fs::write(&path, body.to_string());
+    let _ = std::fs::write(path, body.to_string());
 }
 
 impl PolicyGate {
     pub fn new(config: PolicyConfig, cancel: CancellationToken) -> Self {
-        let approvals = load_persistent_approvals();
+        let path = approvals_path();
+        let approvals = load_persistent_approvals(&path);
         Self {
             config,
             approvals: Mutex::new(approvals),
             cancel,
+            store_path: Some(path),
+        }
+    }
+
+    /// In-memory gate with no disk persistence — for tests.
+    #[cfg(test)]
+    pub(crate) fn new_ephemeral(config: PolicyConfig, cancel: CancellationToken) -> Self {
+        Self {
+            config,
+            approvals: Mutex::new(HashMap::new()),
+            cancel,
+            store_path: None,
         }
     }
 
@@ -327,7 +342,9 @@ impl PolicyGate {
             }
             ApprovalDecision::Session => {
                 approvals.insert(app_class.into(), ApprovalState::Session);
-                save_persistent_approvals(&approvals);
+                if let Some(path) = &self.store_path {
+                    save_persistent_approvals(path, &approvals);
+                }
             }
             ApprovalDecision::Deny => {
                 approvals.insert(app_class.into(), ApprovalState::Denied);
@@ -388,7 +405,7 @@ mod tests {
     use crate::keymap::parse_chord;
 
     fn empty_gate() -> PolicyGate {
-        PolicyGate::new(PolicyConfig::default(), CancellationToken::new())
+        PolicyGate::new_ephemeral(PolicyConfig::default(), CancellationToken::new())
     }
 
     #[tokio::test]
@@ -428,7 +445,7 @@ mod tests {
                 sentinel: None,
             },
         );
-        let g = PolicyGate::new(config, CancellationToken::new());
+        let g = PolicyGate::new_ephemeral(config, CancellationToken::new());
         let err = g
             .check(TargetApp::Class("brave-browser".into()), Action::Generic)
             .await
@@ -446,7 +463,7 @@ mod tests {
                 sentinel: None,
             },
         );
-        let g = PolicyGate::new(config, CancellationToken::new());
+        let g = PolicyGate::new_ephemeral(config, CancellationToken::new());
         let err = g
             .check(TargetApp::Class("konsole".into()), Action::KeyboardType)
             .await
@@ -464,7 +481,7 @@ mod tests {
                 sentinel: None,
             },
         );
-        let g = PolicyGate::new(config, CancellationToken::new());
+        let g = PolicyGate::new_ephemeral(config, CancellationToken::new());
         // Need to approve first.
         let _ = g
             .check(
@@ -498,7 +515,7 @@ mod tests {
                 sentinel: None,
             },
         );
-        let g = PolicyGate::new(config, CancellationToken::new());
+        let g = PolicyGate::new_ephemeral(config, CancellationToken::new());
         let err = g
             .check(
                 TargetApp::Class("konsole".into()),
@@ -521,7 +538,7 @@ mod tests {
                 sentinel: Some(Sentinel::ShellAccess),
             },
         );
-        let g = PolicyGate::new(config, CancellationToken::new());
+        let g = PolicyGate::new_ephemeral(config, CancellationToken::new());
         let _ = g
             .check(TargetApp::Class("konsole".into()), Action::Generic)
             .await;
@@ -538,7 +555,7 @@ mod tests {
     #[tokio::test]
     async fn cancellation_short_circuits() {
         let token = CancellationToken::new();
-        let g = PolicyGate::new(PolicyConfig::default(), token.clone());
+        let g = PolicyGate::new_ephemeral(PolicyConfig::default(), token.clone());
         token.cancel();
         let err = g
             .check(TargetApp::Classless, Action::Generic)
