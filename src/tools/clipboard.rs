@@ -30,7 +30,10 @@ pub struct ClipboardWriteArgs {
 }
 
 #[derive(Debug, Default, Serialize, JsonSchema)]
-pub struct ClipboardWriteResponse {}
+#[serde(rename_all = "snake_case")]
+pub struct ClipboardWriteResponse {
+    pub ok: bool,
+}
 
 pub async fn clipboard_read(
     _state: &KdeMcp,
@@ -134,9 +137,38 @@ fn levenshtein(a: &str, b: &str) -> usize {
 
 pub async fn clipboard_write(
     _state: &KdeMcp,
-    _args: ClipboardWriteArgs,
+    args: ClipboardWriteArgs,
 ) -> Result<ClipboardWriteResponse, ToolError> {
-    Err(ToolError::NotImplemented)
+    use tokio::io::AsyncWriteExt;
+    let mut child = tokio::process::Command::new("wl-copy")
+        .arg("--type")
+        .arg("text/plain")
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| ToolError::ExternalCommandFailed {
+            stderr: format!("spawn wl-copy: {e}"),
+        })?;
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin
+            .write_all(args.content.as_bytes())
+            .await
+            .map_err(|e| ToolError::ExternalCommandFailed {
+                stderr: format!("write to wl-copy: {e}"),
+            })?;
+        drop(stdin);
+    }
+    let status = child
+        .wait()
+        .await
+        .map_err(|e| ToolError::ExternalCommandFailed {
+            stderr: format!("wait wl-copy: {e}"),
+        })?;
+    if !status.success() {
+        return Err(ToolError::ExternalCommandFailed {
+            stderr: format!("wl-copy exited {status:?}"),
+        });
+    }
+    Ok(ClipboardWriteResponse { ok: true })
 }
 
 #[cfg(test)]
