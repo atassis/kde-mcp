@@ -24,13 +24,22 @@ pub struct Tagged<T> {
 
 impl<T> Tagged<T> {
     pub fn trusted(text: T) -> Self {
-        Self { trust: Trust::Trusted, text }
+        Self {
+            trust: Trust::Trusted,
+            text,
+        }
     }
     pub fn agent_authored(text: T) -> Self {
-        Self { trust: Trust::AgentAuthored, text }
+        Self {
+            trust: Trust::AgentAuthored,
+            text,
+        }
     }
     pub fn external(text: T) -> Self {
-        Self { trust: Trust::External, text }
+        Self {
+            trust: Trust::External,
+            text,
+        }
     }
 }
 

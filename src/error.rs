@@ -110,7 +110,10 @@ mod tests {
                 fallback_suggestion: None,
             }
             .code(),
-            ToolError::TargetNotFound { closest_match: None }.code(),
+            ToolError::TargetNotFound {
+                closest_match: None,
+            }
+            .code(),
             ToolError::PermissionDenied { reason: "x".into() }.code(),
             ToolError::TierRestricted {
                 app_class: "x".into(),

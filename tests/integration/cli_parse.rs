@@ -10,8 +10,7 @@ fn parses_live_mode() {
 
 #[test]
 fn parses_virtual_mode_with_vnc() {
-    let cli =
-        Cli::try_parse_from(["kde-mcp", "--mode=virtual", "--vnc=5910"]).unwrap();
+    let cli = Cli::try_parse_from(["kde-mcp", "--mode=virtual", "--vnc=5910"]).unwrap();
     assert_eq!(cli.mode, Mode::Virtual);
     assert_eq!(cli.vnc, Some(5910));
 }
@@ -25,8 +24,7 @@ fn rejects_unknown_mode() {
 
 #[test]
 fn rejects_vnc_in_live_mode() {
-    let err =
-        parse_and_validate(["kde-mcp", "--mode=live", "--vnc=5910"]).unwrap_err();
+    let err = parse_and_validate(["kde-mcp", "--mode=live", "--vnc=5910"]).unwrap_err();
     let msg = err.to_string();
     assert!(msg.to_lowercase().contains("vnc"), "actual: {msg}");
 }
@@ -40,8 +38,7 @@ fn mode_is_required() {
 
 #[test]
 fn vnc_port_below_1024_rejected() {
-    let err = Cli::try_parse_from(["kde-mcp", "--mode=virtual", "--vnc=22"])
-        .unwrap_err();
+    let err = Cli::try_parse_from(["kde-mcp", "--mode=virtual", "--vnc=22"]).unwrap_err();
     let msg = err.to_string();
     assert!(msg.contains("22") || msg.contains("range"), "actual: {msg}");
 }

@@ -16,9 +16,7 @@ pub struct ClipboardWriteArgs {
 #[derive(Debug, Default, Serialize, JsonSchema)]
 pub struct ClipboardWriteResponse {}
 
-pub async fn clipboard_read(
-    _args: ClipboardReadArgs,
-) -> Result<ClipboardReadResponse, ToolError> {
+pub async fn clipboard_read(_args: ClipboardReadArgs) -> Result<ClipboardReadResponse, ToolError> {
     Err(ToolError::NotImplemented)
 }
 

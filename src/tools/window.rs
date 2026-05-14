@@ -28,8 +28,6 @@ pub async fn window_query(_args: WindowQueryArgs) -> Result<WindowQueryResponse,
     Err(ToolError::NotImplemented)
 }
 
-pub async fn window_control(
-    _args: WindowControlArgs,
-) -> Result<WindowControlResponse, ToolError> {
+pub async fn window_control(_args: WindowControlArgs) -> Result<WindowControlResponse, ToolError> {
     Err(ToolError::NotImplemented)
 }

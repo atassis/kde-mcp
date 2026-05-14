@@ -236,22 +236,20 @@ impl KdeMcp {
 #[tool_handler]
 impl ServerHandler for KdeMcp {
     fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(
-            ServerCapabilities::builder().enable_tools().build(),
-        )
-        // from_build_env() reads the SDK's own metadata, not ours — use
-        // CARGO_PKG_NAME / CARGO_PKG_VERSION from the consuming crate so the
-        // wire reports kde-mcp/0.1.0, not rmcp/1.7.0.
-        .with_server_info(Implementation::new(
-            env!("CARGO_PKG_NAME"),
-            env!("CARGO_PKG_VERSION"),
-        ))
-        .with_protocol_version(ProtocolVersion::V_2025_11_25)
-        .with_instructions(
-            "kde-mcp: KDE Plasma 6 / Wayland desktop control. \
+        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+            // from_build_env() reads the SDK's own metadata, not ours — use
+            // CARGO_PKG_NAME / CARGO_PKG_VERSION from the consuming crate so the
+            // wire reports kde-mcp/0.1.0, not rmcp/1.7.0.
+            .with_server_info(Implementation::new(
+                env!("CARGO_PKG_NAME"),
+                env!("CARGO_PKG_VERSION"),
+            ))
+            .with_protocol_version(ProtocolVersion::V_2025_11_25)
+            .with_instructions(
+                "kde-mcp: KDE Plasma 6 / Wayland desktop control. \
              Phase 0 build — all tools return not_implemented."
-                .to_string(),
-        )
+                    .to_string(),
+            )
     }
 }
 
@@ -272,10 +270,7 @@ fn tool_result<T: serde::Serialize>(r: Result<T, ToolError>) -> CallToolResult {
             let msg = e.to_string();
             let details = serde_json::to_value(&e).unwrap_or(serde_json::Value::Null);
             let payload = serde_json::json!({ "code": code, "details": details });
-            CallToolResult::error(vec![
-                Content::text(msg),
-                Content::text(payload.to_string()),
-            ])
+            CallToolResult::error(vec![Content::text(msg), Content::text(payload.to_string())])
         }
     }
 }

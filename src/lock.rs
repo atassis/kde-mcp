@@ -109,10 +109,12 @@ impl ModeLock {
 
         match lock.try_write() {
             Ok(mut guard) => {
-                guard.seek(SeekFrom::Start(0)).map_err(|source| LockError::Io {
-                    path: path.clone(),
-                    source,
-                })?;
+                guard
+                    .seek(SeekFrom::Start(0))
+                    .map_err(|source| LockError::Io {
+                        path: path.clone(),
+                        source,
+                    })?;
                 guard.set_len(0).map_err(|source| LockError::Io {
                     path: path.clone(),
                     source,

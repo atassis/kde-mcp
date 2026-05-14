@@ -38,7 +38,11 @@ fn server_advertises_sixteen_tools_with_expected_names() {
 
     let expected: HashSet<String> = EXPECTED_WIRE_NAMES.iter().map(|s| s.to_string()).collect();
 
-    assert_eq!(names.len(), 16, "expected 16 wire tool names, got {names:?}");
+    assert_eq!(
+        names.len(),
+        16,
+        "expected 16 wire tool names, got {names:?}"
+    );
     assert!(
         names == expected,
         "tool name set drift — missing: {:?}, extra: {:?}",

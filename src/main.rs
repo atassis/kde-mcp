@@ -25,8 +25,8 @@ async fn main() -> Result<()> {
 
     let mode_name = cli.mode.as_str();
 
-    let lock = ModeLock::acquire(mode_name)
-        .with_context(|| format!("acquiring {mode_name} mode lock"))?;
+    let lock =
+        ModeLock::acquire(mode_name).with_context(|| format!("acquiring {mode_name} mode lock"))?;
     tracing::info!(lock = %lock.path().display(), "mode lock acquired");
 
     notify::notify_lock_acquired(mode_name).await;

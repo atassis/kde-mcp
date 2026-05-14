@@ -8,16 +8,8 @@ pub async fn notify_lock_acquired(mode: &str) {
         "virtual" => "a virtual desktop session",
         _ => "your desktop",
     };
-    let body = format!(
-        "kde-mcp is controlling {mode_descriptor}. Press Meta+Esc to abort."
-    );
-    fire_blocking(
-        "Claude is using your computer",
-        body,
-        Urgency::Normal,
-        5000,
-    )
-    .await;
+    let body = format!("kde-mcp is controlling {mode_descriptor}. Press Meta+Esc to abort.");
+    fire_blocking("Claude is using your computer", body, Urgency::Normal, 5000).await;
 }
 
 /// Release-notification fired right before the binary exits, after the lock

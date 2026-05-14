@@ -87,6 +87,10 @@ impl RefStore {
     pub async fn len(&self) -> usize {
         self.inner.read().await.map.len()
     }
+
+    pub async fn is_empty(&self) -> bool {
+        self.inner.read().await.map.is_empty()
+    }
 }
 
 #[cfg(test)]
@@ -126,10 +130,7 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(80)).await;
         let fresh = store.mint(RefKind::Window, "fresh").await;
         store.purge_expired().await;
-        assert!(matches!(
-            store.resolve(&old).await,
-            Err(RefError::Unknown)
-        ));
+        assert!(matches!(store.resolve(&old).await, Err(RefError::Unknown)));
         assert!(store.resolve(&fresh).await.is_ok());
         assert_eq!(store.len().await, 1);
     }

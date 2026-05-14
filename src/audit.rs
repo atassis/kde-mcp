@@ -27,7 +27,9 @@ pub struct AuditRecord {
 /// - `text_editor_edit.{old_str,new_str,content}`: hashed when > 500 chars.
 /// - Everything else passes through verbatim.
 pub fn redact(tool: &str, args: Value) -> Value {
-    let Value::Object(mut map) = args else { return args };
+    let Value::Object(mut map) = args else {
+        return args;
+    };
     match tool {
         "clipboard_write" => {
             if let Some(content) = map.get_mut("content") {
@@ -81,8 +83,14 @@ impl AuditLog {
         if let Some(parent) = path.parent() {
             tokio::fs::create_dir_all(parent).await?;
         }
-        let file = OpenOptions::new().create(true).append(true).open(path).await?;
-        Ok(Self { file: Mutex::new(file) })
+        let file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+            .await?;
+        Ok(Self {
+            file: Mutex::new(file),
+        })
     }
 
     pub async fn write(&self, mut rec: AuditRecord) -> std::io::Result<()> {
@@ -126,7 +134,10 @@ mod tests {
         assert_eq!(v["mode"], "live");
         assert_eq!(v["ok"], true);
         assert!(v["ts"].as_str().unwrap().contains("T"));
-        assert!(v.get("error").is_none(), "error should be omitted when None");
+        assert!(
+            v.get("error").is_none(),
+            "error should be omitted when None"
+        );
     }
 
     #[test]
