@@ -53,15 +53,19 @@ pub fn redact(tool: &str, args: Value) -> Value {
     Value::Object(map)
 }
 
-// Placeholder hash for Phase 0. Replaced by sha2::Sha256 when Phase 4
-// (which is the first phase to actually write redacted content) lands.
-// The output is visibly tagged so it cannot be mistaken for a real sha256.
+// Real SHA-256 of the JSON-serialised value. Phase 6 polish replaces the
+// Phase 0 placeholder. Format: lowercase hex string prefixed `sha256:`.
 fn placeholder_hash(v: &Value) -> String {
-    use std::hash::{Hash, Hasher};
-    let s = serde_json::to_string(v).unwrap_or_default();
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    s.hash(&mut h);
-    format!("placeholder:{:016x}", h.finish())
+    use sha2::{Digest, Sha256};
+    let s = if let Some(text) = v.as_str() {
+        text.as_bytes().to_vec()
+    } else {
+        serde_json::to_vec(v).unwrap_or_default()
+    };
+    let mut hasher = Sha256::new();
+    hasher.update(&s);
+    let digest = hasher.finalize();
+    format!("sha256:{digest:x}")
 }
 
 pub fn default_path() -> PathBuf {
@@ -143,9 +147,25 @@ mod tests {
     #[test]
     fn redacts_clipboard_write_content() {
         let r = redact("clipboard_write", json!({"content": "secret"}));
-        assert!(r["content"]["sha256"].is_string());
+        let hash = r["content"]["sha256"].as_str().expect("sha256");
+        assert!(hash.starts_with("sha256:"));
+        // Real SHA-256 produces 64 hex chars.
+        assert_eq!(hash.len(), "sha256:".len() + 64);
         assert!(r["content"].get("plaintext").is_none());
         assert!(!r.to_string().contains("secret"));
+    }
+
+    #[test]
+    fn redacted_hash_is_deterministic_and_real_sha256() {
+        let r1 = redact("clipboard_write", json!({"content": "hello"}));
+        let r2 = redact("clipboard_write", json!({"content": "hello"}));
+        assert_eq!(r1["content"]["sha256"], r2["content"]["sha256"]);
+        // SHA-256 of "hello" is 2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824.
+        let h = r1["content"]["sha256"].as_str().unwrap();
+        assert_eq!(
+            h,
+            "sha256:2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
+        );
     }
 
     #[test]

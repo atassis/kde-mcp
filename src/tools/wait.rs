@@ -88,7 +88,8 @@ async fn poll_window(
             Duration::from_secs(2),
         )
         .await?;
-        let v: serde_json::Value = serde_json::from_str(&payload).unwrap_or(serde_json::Value::Null);
+        let v: serde_json::Value =
+            serde_json::from_str(&payload).unwrap_or(serde_json::Value::Null);
         let entries = crate::tools::window::parse_entries(&v).unwrap_or_default();
         let any_matches = entries.iter().any(|e| {
             let class_ok = class_filter
@@ -97,7 +98,12 @@ async fn poll_window(
                 .unwrap_or(true);
             let title_ok = re
                 .as_ref()
-                .map(|r| e.title.as_ref().map(|t| r.is_match(&t.text)).unwrap_or(false))
+                .map(|r| {
+                    e.title
+                        .as_ref()
+                        .map(|t| r.is_match(&t.text))
+                        .unwrap_or(false)
+                })
                 .unwrap_or(true);
             let pid_ok = pid_filter.map(|p| e.pid == Some(p)).unwrap_or(true);
             class_ok && title_ok && pid_ok

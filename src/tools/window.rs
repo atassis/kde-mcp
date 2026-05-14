@@ -289,12 +289,9 @@ pub async fn window_control(
             });
         }
     };
-    let _ = crate::kwin::scripting::run_script(
-        &state.bus,
-        &body,
-        std::time::Duration::from_secs(2),
-    )
-    .await?;
+    let _ =
+        crate::kwin::scripting::run_script(&state.bus, &body, std::time::Duration::from_secs(2))
+            .await?;
     Ok(WindowControlResponse { ok: true })
 }
 

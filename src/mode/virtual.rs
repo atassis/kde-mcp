@@ -69,11 +69,10 @@ impl VirtualHandle {
             });
         }
         let out = String::from_utf8_lossy(&launch.stdout);
-        let bus_address = parse_dbus_address(&out).ok_or_else(|| {
-            ToolError::ExternalCommandFailed {
+        let bus_address =
+            parse_dbus_address(&out).ok_or_else(|| ToolError::ExternalCommandFailed {
                 stderr: format!("could not parse DBUS_SESSION_BUS_ADDRESS from: {out}"),
-            }
-        })?;
+            })?;
         // SAFETY: env mutation happens before the tokio runtime hands tool
         // calls to threads that read this var. The tokio runtime is alive
         // but no tool has fired yet during bootstrap.

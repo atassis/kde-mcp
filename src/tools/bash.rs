@@ -71,13 +71,12 @@ pub async fn bash(state: &KdeMcp, args: BashArgs) -> Result<BashResponse, ToolEr
     // Lazy PTY spawn. The persistent session means `cd /tmp; pwd` works
     // across calls until restart=true.
     let session_arc = ensure_session(state)?;
-    let outcome = tokio::task::spawn_blocking(move || {
-        run_command_in_session(session_arc, &command, timeout)
-    })
-    .await
-    .map_err(|e| ToolError::ExternalCommandFailed {
-        stderr: format!("bash join: {e}"),
-    })??;
+    let outcome =
+        tokio::task::spawn_blocking(move || run_command_in_session(session_arc, &command, timeout))
+            .await
+            .map_err(|e| ToolError::ExternalCommandFailed {
+                stderr: format!("bash join: {e}"),
+            })??;
 
     let (stdout, truncated_out) = truncate(outcome.stdout);
     let (stderr, _) = truncate(outcome.stderr);
@@ -183,9 +182,11 @@ fn run_command_in_session(
     timeout: Duration,
 ) -> Result<CommandOutcome, ToolError> {
     let mut guard = session_arc.lock().unwrap_or_else(|e| e.into_inner());
-    let session = guard.as_mut().ok_or_else(|| ToolError::ExternalCommandFailed {
-        stderr: "bash session unexpectedly absent".into(),
-    })?;
+    let session = guard
+        .as_mut()
+        .ok_or_else(|| ToolError::ExternalCommandFailed {
+            stderr: "bash session unexpectedly absent".into(),
+        })?;
 
     // Sentinel marker so we know when the command's output ends.
     let marker = format!("__KDEMCP_END_{}__", uuid_simple());
@@ -205,12 +206,13 @@ fn run_command_in_session(
             stderr: format!("pty flush: {e}"),
         })?;
 
-    let mut reader = session
-        .master
-        .try_clone_reader()
-        .map_err(|e| ToolError::ExternalCommandFailed {
-            stderr: format!("pty reader: {e}"),
-        })?;
+    let mut reader =
+        session
+            .master
+            .try_clone_reader()
+            .map_err(|e| ToolError::ExternalCommandFailed {
+                stderr: format!("pty reader: {e}"),
+            })?;
 
     let mut buf = String::new();
     let mut chunk = [0u8; 4096];
