@@ -1,19 +1,68 @@
 use crate::error::ToolError;
+use crate::kwin::scripting::run_script;
+use crate::refs::RefKind;
 use crate::server::KdeMcp;
+use crate::trust::{Tagged, Trust};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use std::time::Duration;
 
 #[derive(Debug, Default, Deserialize, JsonSchema, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub struct WindowQueryArgs {
+    /// "list" | "get_geometry" | "find"
+    #[serde(default)]
+    pub action: Option<String>,
+    /// "ids" | "titles" | "full"
     #[serde(default)]
     pub format: Option<String>,
     #[serde(default)]
-    pub class: Option<String>,
+    pub r#match: Option<WindowMatch>,
+    #[serde(default)]
+    pub window_uuid: Option<String>,
 }
 
-#[derive(Debug, Default, Serialize, JsonSchema)]
-pub struct WindowQueryResponse {}
+#[derive(Debug, Default, Deserialize, JsonSchema, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub struct WindowMatch {
+    #[serde(default)]
+    pub title_regex: Option<String>,
+    #[serde(default)]
+    pub class: Option<String>,
+    #[serde(default)]
+    pub pid: Option<i64>,
+    #[serde(default)]
+    pub role: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub struct WindowEntry {
+    pub uuid: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<Tagged<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub class: Option<Tagged<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pid: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub geometry: Option<[i32; 4]>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub screen: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub minimized: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub maximized: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fullscreen: Option<bool>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub struct WindowQueryResponse {
+    pub windows: Vec<WindowEntry>,
+}
 
 #[derive(Debug, Deserialize, JsonSchema, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -26,15 +75,216 @@ pub struct WindowControlArgs {
 pub struct WindowControlResponse {}
 
 pub async fn window_query(
-    _state: &KdeMcp,
-    _args: WindowQueryArgs,
+    state: &KdeMcp,
+    args: WindowQueryArgs,
 ) -> Result<WindowQueryResponse, ToolError> {
-    Err(ToolError::NotImplemented)
+    let format = args.format.as_deref().unwrap_or("titles").to_string();
+    let action = args.action.as_deref().unwrap_or("list").to_string();
+    let payload = run_script(&state.bus, JS_LIST_ALL, Duration::from_secs(2)).await?;
+    let raw: Value = serde_json::from_str(&payload).map_err(|e| {
+        ToolError::ExternalCommandFailed {
+            stderr: format!("kwin script JSON parse: {e}"),
+        }
+    })?;
+    let mut entries = parse_entries(&raw)?;
+
+    // Mint refs and replace the raw KWin UUID with our opaque ref.
+    for entry in entries.iter_mut() {
+        let opaque = state.refs.mint(RefKind::Window, entry.uuid.clone()).await;
+        entry.uuid = opaque;
+    }
+
+    // Apply match filter.
+    if let Some(m) = &args.r#match {
+        if let Some(class) = &m.class {
+            entries.retain(|e| {
+                e.class
+                    .as_ref()
+                    .map(|c| &c.text == class)
+                    .unwrap_or(false)
+            });
+        }
+        if let Some(tr) = &m.title_regex {
+            let re = regex_lite::Regex::new(tr).map_err(|e| ToolError::UnsupportedRegion {
+                reason: format!("invalid title_regex: {e}"),
+            })?;
+            entries.retain(|e| {
+                e.title
+                    .as_ref()
+                    .map(|t| re.is_match(&t.text))
+                    .unwrap_or(false)
+            });
+        }
+        if let Some(pid) = m.pid {
+            entries.retain(|e| e.pid == Some(pid));
+        }
+    }
+
+    if action == "get_geometry" {
+        if let Some(ref_id) = args.window_uuid {
+            entries.retain(|e| e.uuid == ref_id);
+        } else {
+            return Err(ToolError::TargetNotFound {
+                closest_match: None,
+            });
+        }
+    }
+
+    let projected = project(&entries, &format);
+    Ok(WindowQueryResponse { windows: projected })
 }
+
+pub(crate) fn project(entries: &[WindowEntry], format: &str) -> Vec<WindowEntry> {
+    entries
+        .iter()
+        .map(|e| match format {
+            "ids" => WindowEntry {
+                uuid: e.uuid.clone(),
+                title: None,
+                class: e.class.clone(),
+                pid: None,
+                geometry: None,
+                screen: e.screen.clone(),
+                minimized: None,
+                maximized: None,
+                fullscreen: None,
+            },
+            "titles" => WindowEntry {
+                uuid: e.uuid.clone(),
+                title: e.title.clone(),
+                class: e.class.clone(),
+                pid: None,
+                geometry: None,
+                screen: e.screen.clone(),
+                minimized: None,
+                maximized: None,
+                fullscreen: None,
+            },
+            _ => e.clone(),
+        })
+        .collect()
+}
+
+pub(crate) fn parse_entries(v: &Value) -> Result<Vec<WindowEntry>, ToolError> {
+    let arr = v
+        .as_array()
+        .ok_or_else(|| ToolError::ExternalCommandFailed {
+            stderr: "kwin script payload was not a JSON array".into(),
+        })?;
+    let mut out = Vec::with_capacity(arr.len());
+    for item in arr {
+        let g = item.get("geometry").and_then(|g| g.as_array());
+        let geometry = g.and_then(|a| {
+            if a.len() == 4 {
+                Some([
+                    a[0].as_i64().unwrap_or(0) as i32,
+                    a[1].as_i64().unwrap_or(0) as i32,
+                    a[2].as_i64().unwrap_or(0) as i32,
+                    a[3].as_i64().unwrap_or(0) as i32,
+                ])
+            } else {
+                None
+            }
+        });
+        out.push(WindowEntry {
+            uuid: item
+                .get("uuid")
+                .and_then(|x| x.as_str())
+                .unwrap_or("")
+                .to_string(),
+            title: item.get("caption").and_then(|x| x.as_str()).map(|s| Tagged {
+                trust: Trust::External,
+                text: s.to_string(),
+            }),
+            class: item
+                .get("resourceClass")
+                .and_then(|x| x.as_str())
+                .map(|s| Tagged {
+                    trust: Trust::Trusted,
+                    text: s.to_string(),
+                }),
+            pid: item.get("pid").and_then(|x| x.as_i64()),
+            geometry,
+            screen: item
+                .get("screen")
+                .and_then(|x| x.as_str())
+                .map(|s| s.to_string()),
+            minimized: item.get("minimized").and_then(|x| x.as_bool()),
+            maximized: item.get("maximized").and_then(|x| x.as_bool()),
+            fullscreen: item.get("fullScreen").and_then(|x| x.as_bool()),
+        });
+    }
+    Ok(out)
+}
+
+pub(crate) const JS_LIST_ALL: &str = r#"
+    var ws = workspace;
+    var windows = ws.windowList();
+    return windows.map(function(w) {
+        var g = w.frameGeometry;
+        var out = w.output;
+        return {
+            uuid: w.internalId ? w.internalId.toString() : "",
+            caption: w.caption || "",
+            resourceClass: w.resourceClass || "",
+            pid: w.pid || 0,
+            geometry: [g.x, g.y, g.width, g.height],
+            screen: out ? out.name : null,
+            minimized: !!w.minimized,
+            fullScreen: !!w.fullScreen,
+            maximized: w.maximizeMode ? (w.maximizeMode > 0) : false
+        };
+    });
+"#;
 
 pub async fn window_control(
     _state: &KdeMcp,
     _args: WindowControlArgs,
 ) -> Result<WindowControlResponse, ToolError> {
     Err(ToolError::NotImplemented)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn format_ids_drops_everything_but_uuid_and_class() {
+        let raw = json!([
+            {"uuid":"win#1","caption":"Kate","resourceClass":"kate","pid":12,"geometry":[0,0,800,600],"screen":"DP-1"},
+            {"uuid":"win#2","caption":"Brave","resourceClass":"brave-browser","pid":13,"geometry":[0,0,800,600],"screen":"DP-1"}
+        ]);
+        let entries = parse_entries(&raw).unwrap();
+        let projected = project(&entries, "ids");
+        let v = serde_json::to_value(&projected).unwrap();
+        // `title` is omitted (None) and serde skips it; the object should not
+        // have a `title` key at all.
+        assert!(v[0].get("title").is_none());
+        assert!(v[0]["uuid"].is_string());
+        assert!(v[0]["class"].is_object());
+    }
+
+    #[test]
+    fn format_titles_includes_caption_but_not_pid_or_geometry() {
+        let raw = json!([
+            {"uuid":"win#1","caption":"Kate","resourceClass":"kate","pid":12,"geometry":[0,0,800,600],"screen":"DP-1"}
+        ]);
+        let entries = parse_entries(&raw).unwrap();
+        let projected = project(&entries, "titles");
+        let v = serde_json::to_value(&projected).unwrap();
+        assert!(v[0]["title"].is_object());
+        assert!(v[0].get("pid").is_none());
+        assert!(v[0].get("geometry").is_none());
+    }
+
+    #[test]
+    fn parse_entries_extracts_geometry_array() {
+        let raw = json!([
+            {"uuid":"win#1","caption":"K","resourceClass":"k","pid":1,"geometry":[10,20,300,400],"screen":"DP-1"}
+        ]);
+        let entries = parse_entries(&raw).unwrap();
+        assert_eq!(entries[0].geometry, Some([10, 20, 300, 400]));
+        assert_eq!(entries[0].pid, Some(1));
+    }
 }
