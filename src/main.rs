@@ -26,6 +26,15 @@ async fn main() -> Result<()> {
 
     let mode_name = cli.mode.as_str();
 
+    // Virtual mode's bootstrap reads KDE_MCP_VNC_PORT to pass to wayvnc.
+    if let Some(port) = cli.vnc {
+        // SAFETY: only set before the runtime spawns worker threads that
+        // would read this var; bootstrap reads it on the current task.
+        unsafe {
+            std::env::set_var("KDE_MCP_VNC_PORT", port.to_string());
+        }
+    }
+
     let lock =
         ModeLock::acquire(mode_name).with_context(|| format!("acquiring {mode_name} mode lock"))?;
     tracing::info!(lock = %lock.path().display(), "mode lock acquired");
