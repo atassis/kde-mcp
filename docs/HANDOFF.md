@@ -1,6 +1,26 @@
 # Handoff — pick up where we left off
 
-A snapshot of project state at the moment the design conversation paused. Read this first if you are returning to the project (Claude session or otherwise) after time away.
+A snapshot of project state. Read this first if you are returning to the project (Claude session or otherwise) after time away.
+
+---
+
+## TL;DR — what to do first in a fresh session
+
+```sh
+cat CLAUDE.md             # project conventions (incl. global ones at ~/.claude/CLAUDE.md)
+cat docs/HANDOFF.md       # this file
+git log --oneline | head -20
+git tag -l                # phase-0 should be present
+cargo test --workspace    # 37 tests; should all pass in <2 s after build
+```
+
+Then **verify Phase 0 still works end-to-end** with the smoke procedure in `tests/integration/SMOKE.md` — pipe a hand-built JSON-RPC fixture to the release binary and confirm 3 responses come back with the expected shape. Takes 30 seconds. If that's green, the project is exactly where this handoff says it is.
+
+After verification, the concrete next action is to **plan Phase 1**:
+
+1. Read the "Phase 1 pre-plan recommendations" below; the three decisions are pre-answered.
+2. Invoke `superpowers:writing-plans` targeting Phase 1 (read-only tools per spec §14 row 1).
+3. Then `superpowers:executing-plans` (or `subagent-driven-development`) to implement.
 
 ---
 
@@ -45,8 +65,9 @@ The headline decisions (each backed by an ADR):
 | Accessibility-tree first; pixels fallback | 0005 | Deterministic, 5-30× cheaper than screenshots; Playwright-MCP's lesson |
 | 15 tools split read/write | 0006 | Consolidate along intent; split along safety for clean per-tool permissioning |
 | Adopt Anthropic safety architecture (policy gate) | 0007 | Lock + tier + per-app approval + sentinel + terminal-mask + Meta+Esc cancel |
+| Visual prompt injection is host-side, not server-side | 0008 | VPI-Bench shows CUAs vulnerable to pixel-content attacks; trust-string discriminator only covers strings — pixel quarantine is the model host's job |
 
-The MVP is sized at **18–23 working days for phases 0–5**, plus open-ended polish. Realistic 5–7 calendar weeks at part-time pace.
+The MVP is sized at **18–23 working days for phases 0–5**, plus open-ended polish. Realistic 5–7 calendar weeks at part-time pace. Phase 0 took **~1 working day** including the EIS keystroke POC bonus.
 
 ## What is NOT yet done
 
@@ -70,13 +91,28 @@ The list of open questions in the original handoff is largely closed:
 - **Still open — KGlobalAccel cancel-shortcut grab.** Phase 3 will deal with this; it's not on Phase 1's critical path.
 - **Still open — `org.freedesktop.Notifications` action-button delivery.** Phase 3 (policy gate / per-app approval) needs this. Phase 1 only uses notifications for acquire/release events, which Phase 0 already verified.
 
-### Phase 1's pre-plan checklist
+### Phase 1 pre-plan recommendations
 
-Before invoking `superpowers:writing-plans` for Phase 1, decide:
+Three decisions need answers before `writing-plans` runs for Phase 1. My recommendations (you should review and override if you disagree before invoking the skill):
 
-1. KWin Scripting output capture mechanism (the three options above).
-2. Whether `window_query` returns a flat list or a per-screen grouping by default (spec §6.1 leaves this open).
-3. Whether `screenshot` masks terminals in Phase 1 (spec §10 layer 7 — but layer 7 is wired through the policy gate which is Phase 3; for Phase 1 the masking could be a static class-list filter, then policy-gate-integrated in Phase 3).
+1. **KWin Scripting output capture: write-to-temp-file.**
+
+   Three viable mechanisms surfaced during Phase 0:
+   - kdotool-style write-to-temp-file: KWin script calls `callDBus("org.freedesktop.DBus.Properties", ...)` or just opens a file. Caller reads after script exits.
+   - journald `print()` capture: KWin script `print()`s, caller scrapes `journalctl --user -t kwin_wayland --since "Ns ago"`. **What we used during Phase 0 spikes** — works but the journald scrape is racy and rate-limited.
+   - In-script `callDBus` round-trip: script calls back into a D-Bus method on the caller's side. Requires the caller to host a D-Bus service — heavyweight.
+
+   **Recommend write-to-temp-file** (option 1). Reasons: deterministic (no journald rate limiting), zero coupling to systemd, easy to test, matches kdotool's battle-tested pattern. Path: `$XDG_RUNTIME_DIR/kde-mcp/script-<nonce>.out` with cleanup-on-read. Each script invocation gets a fresh nonce so concurrent calls don't collide.
+
+2. **`window_query` default grouping: flat list, with `screen` field on each entry.**
+
+   Spec §6.1 leaves `format: "ids" | "titles" | "full"` open. **Recommend flat list always**, with each entry carrying `screen: <output-name>` so a per-screen grouping is trivially computable agent-side. The `format` parameter then controls *which fields* are returned, not *how the list is structured*. Reasons: simpler schema (one shape), agent can group if it cares, fewer pass-through `match` arms in the agent's prompt.
+
+3. **Terminal-masking in Phase 1: static class-list filter, wired through the policy gate in Phase 3.**
+
+   Spec §10 layer 7 (terminal-excluded screenshots) is wired through the policy gate (§6.0 step 6 / Phase 3). But Phase 1 ships `screenshot` standalone — without the gate. **Recommend Phase 1 implements terminal masking with a hardcoded class list** (the spec's `konsole | yakuake | alacritty | kitty | wezterm | foot | ghostty | tilix | gnome-terminal | xterm | xfce4-terminal | ptyxis | warp-terminal`), then Phase 3 replaces the hardcoded list with the policy-table lookup. Phase 1's `screenshot` shouldn't ship without *some* terminal masking — defense in depth means we mask even before the policy gate exists.
+
+If you accept all three recommendations, the Phase 1 plan can be written without further user input.
 
 ## Things the user explicitly chose
 
@@ -99,42 +135,84 @@ From spec §15:
 
 None of these are blockers. They are intentional out-of-scope items.
 
+## Where things live
+
+```
+kde-mcp/
+├── Cargo.toml                          # Phase 0 deps only; expand per phase
+├── rust-toolchain.toml                 # stable, edition 2024, MSRV 1.85
+├── src/
+│   ├── main.rs                         # CLI → lock → notify → bootstrap → rmcp serve
+│   ├── lib.rs                          # module declarations
+│   ├── cli.rs                          # --mode + --vnc parsing
+│   ├── error.rs                        # ToolError enum (13 codes + NotImplemented)
+│   ├── audit.rs                        # JSONL writer + redaction
+│   ├── trust.rs                        # Trust enum + Tagged<T> wrapper
+│   ├── refs.rs                         # opaque-ref TTL store
+│   ├── lock.rs                         # per-mode lockfile + in-process singleton
+│   ├── notify.rs                       # acquire/release KDE notifications
+│   ├── server.rs                       # KdeMcp struct, single #[tool_router] impl, 16 tools
+│   ├── mode/                           # mode/{mod,live,virtual}.rs
+│   └── tools/                          # 12 files, 15 logical tools — all stubs
+├── tests/
+│   ├── integration.rs                  # wrapper for the cargo "integration" binary
+│   └── integration/                    # cli_parse, lockfile, tools_list + SMOKE.md
+├── examples/eis-keystroke-prober/      # Standalone POC for Phase 2 — see README
+├── docs/
+│   ├── HANDOFF.md                      # this file
+│   ├── specs/2026-05-13-kde-...md      # the spec
+│   ├── plans/2026-05-14-phase-0-...md  # the Phase 0 plan we executed
+│   ├── adr/{0001..0008}                # accepted decisions
+│   ├── research/                       # snapshot research + Phase 0 spikes
+│   └── comparison-with-anthropic-computer-use.md
+└── packaging/                          # .desktop file, policy.toml example
+```
+
 ## Reading order if you have 30 minutes
 
-1. `README.md` — 2 minutes, project pitch
-2. `docs/specs/2026-05-13-kde-computer-use-mcp-design.md` §1, §2, §3, §4 — 10 minutes, the design philosophy
-3. `docs/specs/...md` §6 (tool catalogue) and §6.0 (policy gate) — 10 minutes, the tool surface
-4. `docs/adr/0007-adopt-anthropic-safety-architecture.md` — 5 minutes, the most recent decision
-5. `docs/comparison-with-anthropic-computer-use.md` — 5 minutes, why this exists vs. what's already shipping
+1. **This file's TL;DR section** — 1 minute, fastest re-orientation.
+2. `docs/specs/2026-05-13-kde-computer-use-mcp-design.md` §1, §2, §3, §4 — 10 minutes, design philosophy.
+3. `docs/specs/...md` §6 (tool catalogue) + §6.0 (policy gate) + **§13.1 (library pins / module-layout adaptation)** — 10 minutes.
+4. `docs/research/2026-05-14-phase-0-spikes.md` — 5 minutes, the postscript at the end has live-verified findings worth knowing before Phase 2.
+5. `docs/adr/0008-visual-prompt-injection-host-side-defence.md` — 3 minutes, most recent decision.
 
-If you have 5 minutes: just the README and §1-§4 of the spec.
-
-## How to resume work
-
-In a fresh Claude Code session at the repo root:
-
-```
-# 1. Re-orient.
-cat CLAUDE.md
-cat docs/HANDOFF.md
-git log --oneline
-
-# 2. If atassis has reviewed the spec and approves:
-#    Invoke /superpowers:writing-plans (or ask Claude to)
-#    Plan should target Phase 0 first.
-
-# 3. After the plan is written and reviewed:
-#    Invoke /superpowers:executing-plans (or subagent-driven-development)
-#    First task: cargo init + skeleton.
-```
+If you have 5 minutes: just this file's TL;DR + spec §1–§4.
 
 ## How NOT to resume work
 
-- Do not start writing Rust without a plan from `writing-plans`.
-- Do not skip the spec review.
-- Do not modify accepted ADRs in place; write a new ADR if the decision changes.
-- Do not push to a remote without explicit ask.
-- Do not run `sudo` directly; provide commands for the user to run.
+- Do not modify accepted ADRs in place. Write a new ADR if the decision changes; supersede the old one.
+- Do not start Phase 1 code without first invoking `superpowers:writing-plans` for Phase 1.
+- Do not push to a remote without atassis's explicit ask. There is no remote configured.
+- Do not run `sudo` directly; provide commands for the user to run if root is needed.
+- Do not skip the smoke test in `tests/integration/SMOKE.md` after any change to `src/{main,server}.rs` or `Cargo.toml`.
+- Do not delete `examples/eis-keystroke-prober/`. It's the canonical reference for Phase 2's keystroke path.
+- Do not pin `schemars = "0.8"` — must be `"1.0"` to match rmcp 1.7's internal version (spike 0.2 sub-finding).
+
+## Quick recipes
+
+**Re-run the JSON-RPC smoke against the release binary:**
+
+```sh
+cargo build --release
+# Copy the inline script in tests/integration/SMOKE.md §A.1 to /tmp/kde-mcp-smoke.sh
+# (or just inline the heredoc).
+chmod +x /tmp/kde-mcp-smoke.sh
+/tmp/kde-mcp-smoke.sh "$PWD/target/release/kde-mcp" > /tmp/out.jsonl
+python3 -c "import json; ls=open('/tmp/out.jsonl').read().splitlines(); print(len(ls), 'responses'); [print(json.loads(l)['id'] if 'id' in json.loads(l) else 'notif', '->', list(json.loads(l).get('result', {}).keys())[:3]) for l in ls]"
+```
+
+**Re-run the EIS keystroke POC** (with the target window focused):
+
+```sh
+cd examples/eis-keystroke-prober
+cargo run --release
+```
+
+**See exactly what changed since the design phase:**
+
+```sh
+git log --oneline phase-0
+```
 
 ---
 
