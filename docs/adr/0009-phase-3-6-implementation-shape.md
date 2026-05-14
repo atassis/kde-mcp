@@ -1,6 +1,6 @@
 # ADR-0009: Phase 3–6 implementation shape
 
-**Status:** Accepted (2026-05-14)
+**Status:** Accepted (2026-05-14). §2 superseded by ADR-0010. §3, §4, §7, §8, §10 lifted 2026-05-15 (see "Deferrals resolved" at the bottom of this file).
 
 ## Context
 
@@ -117,3 +117,29 @@ prober pattern). The wire surface remains a stub returning
 - **Single combined keyboard+pointer EIS session:** rejected — adds
   state and only saves ~50ms when the agent issues back-to-back
   keyboard+mouse calls (rare).
+
+## Deferrals resolved (2026-05-15)
+
+| Item | Status |
+|---|---|
+| §1 Per-call EIS sessions | Unchanged. Combined keyboard+pointer in one session now supported via `EisSession::keyboard_device`. |
+| §2 KGlobalAccel Meta+Esc | **Done.** See ADR-0010. SIGUSR1 stays as belt-and-braces. |
+| §3 Persistent approval state | **Done.** `~/.local/state/kde-mcp/approvals.json` round-trips on grant; loaded at `PolicyGate::new`. Only `Session` decisions persist. |
+| §4 act_on_element ref-derived target | **Done.** Element bus name → pid (via `GetConnectionUnixProcessID`) → KWin window with matching pid → resourceClass. Falls back to focused-window heuristic on lookup failure. |
+| §5 Bash stdout/stderr demux | Still deferred. Comment in `src/tools/bash.rs` explains the PTY-interleaving + cd-persistence tension. Open as a testing-checklist follow-up. |
+| §6 dbus-launch vs dbus-run-session | Unchanged. |
+| §7 Audit log SHA-256 | Done (Phase 6). |
+| §8 Audit log rotation | **Done.** 50 MB pre-write check rotates to .1/.2/…/.5 per spec §9. |
+| §9 Sensitive paths via substring | Unchanged. |
+| §10 read_text OCR | **Done.** `tesseract` crate (sync C-FFI in `spawn_blocking`). Optional `include_bboxes` via TSV parse. |
+
+Additional lifts (not originally in ADR-0009):
+
+- `mouse` actions `down` / `up` / `hold` (+ duration_ms): done.
+- `mouse` modifier+click via combined EIS session: done.
+- `keyboard.hold_key` (renamed to `hold_ms` arg on `keyboard.key`): done.
+- xkbcommon-based typing for non-US layouts: done. Falls back to clipboard-paste when keymap can't produce the character at level 0 or 1.
+- `wait` conditions `screen_change`, `element_appears`, `element_disappears`: done.
+- `inspect target=focused` via walk-by-state predicate: done.
+- `inspect target=window:<ref>` via window→pid → AT-SPI Application lookup: done.
+- `window_query` actions `get_geometry` and `find`: done.

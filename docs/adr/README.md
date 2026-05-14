@@ -16,7 +16,8 @@ Format: 1-2 pages each. Sections: Status · Context · Decision · Consequences 
 | 0006 | 15 tools split read/write; no Anthropic-style omni-tool | Accepted |
 | 0007 | Adopt Anthropic computer-use safety architecture (policy gate) | Accepted |
 | 0008 | Visual prompt injection defence is host-side, not server-side  | Accepted |
-| 0009 | Phase 3–6 implementation shape (per-call EIS, SIGUSR1 cancel, …) | Accepted |
+| 0009 | Phase 3–6 implementation shape (per-call EIS, SIGUSR1 cancel, …) | Accepted (§2 superseded by 0010) |
+| 0010 | Cancel UX: system tray + Meta+Esc hotkey + dispatch hooks | Accepted |
 
 ## When to add an ADR
 
