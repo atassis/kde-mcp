@@ -1,7 +1,9 @@
 use fd_lock::RwLock;
+use std::collections::HashSet;
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 
 #[derive(Debug, thiserror::Error)]
 pub enum LockError {
@@ -17,24 +19,36 @@ pub enum LockError {
 
 /// Single-session lockfile per mode (spec §10 layer 3).
 ///
-/// Acquired at startup, released when this value is dropped. The PID of the
-/// holder is written into the file so other instances can report it.
+/// Two layers of defense:
 ///
-/// The fd_lock::RwLock is leaked to obtain a `'static` lifetime for the held
-/// guard — this is a documented pattern for process-lifetime singletons. The
-/// memory comes back when the process exits.
+/// 1. **In-process singleton check** via a process-global `HashSet<String>`
+///    of acquired modes. Prevents same-process double-acquire which POSIX
+///    `flock(2)` (advisory, per-open-file-description) is permissive about
+///    on Linux.
+/// 2. **Cross-process flock** via `fd_lock::RwLock`. Prevents two separate
+///    `kde-mcp` binaries from claiming the same mode simultaneously.
+///
+/// The flock-protected file also carries the holder's PID so the loser of a
+/// contention can report who's blocking.
 pub struct ModeLock {
     _guard: fd_lock::RwLockWriteGuard<'static, File>,
     path: PathBuf,
+    mode: String,
 }
 
 impl std::fmt::Debug for ModeLock {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ModeLock")
+            .field("mode", &self.mode)
             .field("path", &self.path)
             .field("holder_pid", &std::process::id())
             .finish_non_exhaustive()
     }
+}
+
+fn modes_held() -> &'static Mutex<HashSet<String>> {
+    static MODES_HELD: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+    MODES_HELD.get_or_init(|| Mutex::new(HashSet::new()))
 }
 
 impl ModeLock {
@@ -45,15 +59,33 @@ impl ModeLock {
         base.join("kde-mcp").join(format!("{mode}.lock"))
     }
 
-    /// Acquire the lock for `mode`. On contention, reads the holder PID from
-    /// the file and returns `AlreadyHeld`.
-    ///
-    /// Stale-lock detection: if the holder PID is no longer alive, we still
-    /// surface `AlreadyHeld` (with `holder_pid: 0` if the file is empty or
-    /// unparsable) — auto-reclaim would race with a freshly-restarting
-    /// holder. The caller (main.rs) can choose to retry; for Phase 0 we
-    /// keep it simple.
     pub fn acquire(mode: &str) -> Result<Self, LockError> {
+        // Layer 1: in-process check.
+        {
+            let mut held = modes_held().lock().expect("modes_held poisoned");
+            if held.contains(mode) {
+                return Err(LockError::AlreadyHeld {
+                    pid: std::process::id(),
+                });
+            }
+            held.insert(mode.to_string());
+        }
+
+        // Layer 2: filesystem flock.
+        // If anything in this block fails we must remove our entry from the
+        // in-process set before returning, otherwise a retry in this process
+        // can't succeed.
+        let res = Self::acquire_inner(mode);
+        if res.is_err() {
+            modes_held()
+                .lock()
+                .expect("modes_held poisoned")
+                .remove(mode);
+        }
+        res
+    }
+
+    fn acquire_inner(mode: &str) -> Result<Self, LockError> {
         let path = Self::path_for(mode);
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(|source| LockError::Io {
@@ -96,6 +128,7 @@ impl ModeLock {
                 Ok(Self {
                     _guard: guard,
                     path,
+                    mode: mode.to_string(),
                 })
             }
             Err(_) => {
@@ -107,6 +140,14 @@ impl ModeLock {
 
     pub fn path(&self) -> &Path {
         &self.path
+    }
+}
+
+impl Drop for ModeLock {
+    fn drop(&mut self) {
+        if let Ok(mut held) = modes_held().lock() {
+            held.remove(&self.mode);
+        }
     }
 }
 
@@ -123,9 +164,9 @@ pub fn pid_alive(pid: u32) -> bool {
     if pid == 0 {
         return false;
     }
-    // signal 0 = liveness probe per POSIX. Returns 0 if signal would be
-    // delivered; -1 with EPERM means the process exists but we lack
-    // permission to signal it (still alive).
+    // signal 0 = liveness probe per POSIX. Returns 0 if the signal *would*
+    // be delivered (process alive); -1 with EPERM means the process exists
+    // but we lack permission to signal it (still alive).
     let r = unsafe { libc::kill(pid as i32, 0) };
     if r == 0 {
         return true;
@@ -146,9 +187,6 @@ mod tests {
     #[test]
     fn path_lives_under_xdg_runtime_dir() {
         let dir = tempfile::tempdir().unwrap();
-        // SAFETY: tests in this binary run on the same thread; env mutation
-        // is observable cross-test, so each test below uses a unique mode
-        // name to dodge interference.
         unsafe { std::env::set_var("XDG_RUNTIME_DIR", dir.path()) };
         let p = ModeLock::path_for("live");
         assert!(p.starts_with(dir.path()));
