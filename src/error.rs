@@ -58,6 +58,12 @@ pub enum ToolError {
     #[error("bus disconnected: {detail}")]
     BusDisconnected { detail: String },
 
+    #[error("i/o error on {path}: {error}")]
+    Io { path: String, error: String },
+
+    #[error("unsupported region: {reason}")]
+    UnsupportedRegion { reason: String },
+
     #[error("not implemented: this tool is a Phase 0 stub")]
     NotImplemented,
 }
@@ -77,6 +83,8 @@ impl ToolError {
             Self::InputDispatchFailed { .. } => "input_dispatch_failed",
             Self::ExternalCommandFailed { .. } => "external_command_failed",
             Self::BusDisconnected { .. } => "bus_disconnected",
+            Self::Io { .. } => "io",
+            Self::UnsupportedRegion { .. } => "unsupported_region",
             Self::NotImplemented => "not_implemented",
         }
     }
@@ -149,6 +157,12 @@ mod tests {
             .code(),
             ToolError::ExternalCommandFailed { stderr: "x".into() }.code(),
             ToolError::BusDisconnected { detail: "x".into() }.code(),
+            ToolError::Io {
+                path: "x".into(),
+                error: "y".into(),
+            }
+            .code(),
+            ToolError::UnsupportedRegion { reason: "x".into() }.code(),
             ToolError::NotImplemented.code(),
         ];
         let unique: std::collections::HashSet<_> = codes.iter().copied().collect();
