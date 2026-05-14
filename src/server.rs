@@ -150,10 +150,12 @@ impl KdeMcp {
         let v = serde_json::to_value(&args).unwrap_or(serde_json::Value::Null);
         let audit = self.audit.clone();
         let mode = self.mode.as_str();
-        Ok(dispatch_audited(audit, mode, "act_on_element", v, async move {
-            tools::act_on_element::act_on_element(self, args).await
-        })
-        .await)
+        Ok(
+            dispatch_audited(audit, mode, "act_on_element", v, async move {
+                tools::act_on_element::act_on_element(self, args).await
+            })
+            .await,
+        )
     }
 
     #[tool(
@@ -185,10 +187,12 @@ impl KdeMcp {
         let v = serde_json::to_value(&args).unwrap_or(serde_json::Value::Null);
         let audit = self.audit.clone();
         let mode = self.mode.as_str();
-        Ok(dispatch_audited(audit, mode, "keyboard.type", v, async move {
-            tools::keyboard::keyboard_type(self, args).await
-        })
-        .await)
+        Ok(
+            dispatch_audited(audit, mode, "keyboard.type", v, async move {
+                tools::keyboard::keyboard_type(self, args).await
+            })
+            .await,
+        )
     }
 
     #[tool(
@@ -203,10 +207,12 @@ impl KdeMcp {
         let v = serde_json::to_value(&args).unwrap_or(serde_json::Value::Null);
         let audit = self.audit.clone();
         let mode = self.mode.as_str();
-        Ok(dispatch_audited(audit, mode, "keyboard.key", v, async move {
-            tools::keyboard::keyboard_key(self, args).await
-        })
-        .await)
+        Ok(
+            dispatch_audited(audit, mode, "keyboard.key", v, async move {
+                tools::keyboard::keyboard_key(self, args).await
+            })
+            .await,
+        )
     }
 
     // ---- Window + clipboard (mixed) ----
@@ -222,10 +228,12 @@ impl KdeMcp {
         let v = serde_json::to_value(&args).unwrap_or(serde_json::Value::Null);
         let audit = self.audit.clone();
         let mode = self.mode.as_str();
-        Ok(dispatch_audited(audit, mode, "window_query", v, async move {
-            tools::window::window_query(self, args).await
-        })
-        .await)
+        Ok(
+            dispatch_audited(audit, mode, "window_query", v, async move {
+                tools::window::window_query(self, args).await
+            })
+            .await,
+        )
     }
 
     #[tool(
@@ -239,10 +247,12 @@ impl KdeMcp {
         let v = serde_json::to_value(&args).unwrap_or(serde_json::Value::Null);
         let audit = self.audit.clone();
         let mode = self.mode.as_str();
-        Ok(dispatch_audited(audit, mode, "window_control", v, async move {
-            tools::window::window_control(self, args).await
-        })
-        .await)
+        Ok(
+            dispatch_audited(audit, mode, "window_control", v, async move {
+                tools::window::window_control(self, args).await
+            })
+            .await,
+        )
     }
 
     #[tool(
@@ -256,10 +266,12 @@ impl KdeMcp {
         let v = serde_json::to_value(&args).unwrap_or(serde_json::Value::Null);
         let audit = self.audit.clone();
         let mode = self.mode.as_str();
-        Ok(dispatch_audited(audit, mode, "clipboard_read", v, async move {
-            tools::clipboard::clipboard_read(self, args).await
-        })
-        .await)
+        Ok(
+            dispatch_audited(audit, mode, "clipboard_read", v, async move {
+                tools::clipboard::clipboard_read(self, args).await
+            })
+            .await,
+        )
     }
 
     #[tool(
@@ -273,10 +285,12 @@ impl KdeMcp {
         let v = serde_json::to_value(&args).unwrap_or(serde_json::Value::Null);
         let audit = self.audit.clone();
         let mode = self.mode.as_str();
-        Ok(dispatch_audited(audit, mode, "clipboard_write", v, async move {
-            tools::clipboard::clipboard_write(self, args).await
-        })
-        .await)
+        Ok(
+            dispatch_audited(audit, mode, "clipboard_write", v, async move {
+                tools::clipboard::clipboard_write(self, args).await
+            })
+            .await,
+        )
     }
 
     // ---- Shell + filesystem ----
@@ -310,10 +324,12 @@ impl KdeMcp {
         let v = serde_json::to_value(&args).unwrap_or(serde_json::Value::Null);
         let audit = self.audit.clone();
         let mode = self.mode.as_str();
-        Ok(dispatch_audited(audit, mode, "text_editor.view", v, async move {
-            tools::text_editor::text_editor_view(self, args).await
-        })
-        .await)
+        Ok(
+            dispatch_audited(audit, mode, "text_editor.view", v, async move {
+                tools::text_editor::text_editor_view(self, args).await
+            })
+            .await,
+        )
     }
 
     #[tool(
@@ -328,10 +344,12 @@ impl KdeMcp {
         let v = serde_json::to_value(&args).unwrap_or(serde_json::Value::Null);
         let audit = self.audit.clone();
         let mode = self.mode.as_str();
-        Ok(dispatch_audited(audit, mode, "text_editor.edit", v, async move {
-            tools::text_editor::text_editor_edit(self, args).await
-        })
-        .await)
+        Ok(
+            dispatch_audited(audit, mode, "text_editor.edit", v, async move {
+                tools::text_editor::text_editor_edit(self, args).await
+            })
+            .await,
+        )
     }
 }
 
@@ -347,9 +365,7 @@ impl ServerHandler for KdeMcp {
                 env!("CARGO_PKG_VERSION"),
             ))
             .with_protocol_version(ProtocolVersion::V_2025_11_25)
-            .with_instructions(
-                "kde-mcp: KDE Plasma 6 / Wayland desktop control.".to_string(),
-            )
+            .with_instructions("kde-mcp: KDE Plasma 6 / Wayland desktop control.".to_string())
     }
 }
 
@@ -388,10 +404,8 @@ where
             let msg = e.to_string();
             let details = serde_json::to_value(&e).unwrap_or(serde_json::Value::Null);
             let payload = serde_json::json!({ "code": code, "details": details });
-            let r = CallToolResult::error(vec![
-                Content::text(msg),
-                Content::text(payload.to_string()),
-            ]);
+            let r =
+                CallToolResult::error(vec![Content::text(msg), Content::text(payload.to_string())]);
             (r, Some(payload))
         }
     };

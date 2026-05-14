@@ -17,7 +17,9 @@ async fn test_state() -> KdeMcp {
 async fn view_file_returns_numbered_lines() {
     let dir = tempdir().unwrap();
     let path = dir.path().join("note.txt");
-    tokio::fs::write(&path, "alpha\nbeta\ngamma\n").await.unwrap();
+    tokio::fs::write(&path, "alpha\nbeta\ngamma\n")
+        .await
+        .unwrap();
     let state = test_state().await;
     let resp = text_editor_view(
         &state,
@@ -40,7 +42,10 @@ async fn view_file_returns_numbered_lines() {
 async fn view_file_respects_view_range_one_indexed_inclusive() {
     let dir = tempdir().unwrap();
     let path = dir.path().join("multi.txt");
-    let body = (1..=10).map(|i| format!("line{i}")).collect::<Vec<_>>().join("\n");
+    let body = (1..=10)
+        .map(|i| format!("line{i}"))
+        .collect::<Vec<_>>()
+        .join("\n");
     tokio::fs::write(&path, body).await.unwrap();
     let state = test_state().await;
     let resp = text_editor_view(
@@ -63,7 +68,10 @@ async fn view_file_respects_view_range_one_indexed_inclusive() {
 async fn view_with_view_range_end_eq_minus_one_means_eof() {
     let dir = tempdir().unwrap();
     let path = dir.path().join("eof.txt");
-    let body = (1..=5).map(|i| format!("ln{i}")).collect::<Vec<_>>().join("\n");
+    let body = (1..=5)
+        .map(|i| format!("ln{i}"))
+        .collect::<Vec<_>>()
+        .join("\n");
     tokio::fs::write(&path, body).await.unwrap();
     let state = test_state().await;
     let resp = text_editor_view(
@@ -85,8 +93,12 @@ async fn view_directory_lists_entries_at_depth_2() {
     let dir = tempdir().unwrap();
     let nested = dir.path().join("sub");
     tokio::fs::create_dir(&nested).await.unwrap();
-    tokio::fs::write(dir.path().join("top.txt"), "x").await.unwrap();
-    tokio::fs::write(nested.join("inner.txt"), "y").await.unwrap();
+    tokio::fs::write(dir.path().join("top.txt"), "x")
+        .await
+        .unwrap();
+    tokio::fs::write(nested.join("inner.txt"), "y")
+        .await
+        .unwrap();
     let state = test_state().await;
     let resp = text_editor_view(
         &state,
@@ -100,8 +112,14 @@ async fn view_directory_lists_entries_at_depth_2() {
     assert_eq!(resp.kind, "directory");
     let entries = resp.entries.unwrap();
     let names: Vec<&str> = entries.iter().map(|s| s.as_str()).collect();
-    assert!(names.iter().any(|n| n.ends_with("/top.txt")), "names: {names:?}");
-    assert!(names.iter().any(|n| n.ends_with("/sub")), "names: {names:?}");
+    assert!(
+        names.iter().any(|n| n.ends_with("/top.txt")),
+        "names: {names:?}"
+    );
+    assert!(
+        names.iter().any(|n| n.ends_with("/sub")),
+        "names: {names:?}"
+    );
     assert!(
         names.iter().any(|n| n.ends_with("/sub/inner.txt")),
         "names: {names:?}"

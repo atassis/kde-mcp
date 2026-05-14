@@ -171,13 +171,12 @@ mod tests {
 
     #[test]
     fn rendered_script_embeds_caller_name_path_and_body() {
-        let js = render_script(
-            ":1.123",
-            "/org/kde/kdemcp/Sink/abcd",
-            "return 42;",
-        );
+        let js = render_script(":1.123", "/org/kde/kdemcp/Sink/abcd", "return 42;");
         assert!(js.contains("\":1.123\""), "missing caller bus name");
-        assert!(js.contains("\"/org/kde/kdemcp/Sink/abcd\""), "missing obj path");
+        assert!(
+            js.contains("\"/org/kde/kdemcp/Sink/abcd\""),
+            "missing obj path"
+        );
         assert!(js.contains("return 42;"), "missing user body");
         assert!(js.contains("(function()"), "body not wrapped in IIFE");
     }

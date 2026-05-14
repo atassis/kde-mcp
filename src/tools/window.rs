@@ -81,11 +81,10 @@ pub async fn window_query(
     let format = args.format.as_deref().unwrap_or("titles").to_string();
     let action = args.action.as_deref().unwrap_or("list").to_string();
     let payload = run_script(&state.bus, JS_LIST_ALL, Duration::from_secs(2)).await?;
-    let raw: Value = serde_json::from_str(&payload).map_err(|e| {
-        ToolError::ExternalCommandFailed {
+    let raw: Value =
+        serde_json::from_str(&payload).map_err(|e| ToolError::ExternalCommandFailed {
             stderr: format!("kwin script JSON parse: {e}"),
-        }
-    })?;
+        })?;
     let mut entries = parse_entries(&raw)?;
 
     // Mint refs and replace the raw KWin UUID with our opaque ref.
@@ -97,12 +96,7 @@ pub async fn window_query(
     // Apply match filter.
     if let Some(m) = &args.r#match {
         if let Some(class) = &m.class {
-            entries.retain(|e| {
-                e.class
-                    .as_ref()
-                    .map(|c| &c.text == class)
-                    .unwrap_or(false)
-            });
+            entries.retain(|e| e.class.as_ref().map(|c| &c.text == class).unwrap_or(false));
         }
         if let Some(tr) = &m.title_regex {
             let re = regex_lite::Regex::new(tr).map_err(|e| ToolError::UnsupportedRegion {
@@ -192,10 +186,13 @@ pub(crate) fn parse_entries(v: &Value) -> Result<Vec<WindowEntry>, ToolError> {
                 .and_then(|x| x.as_str())
                 .unwrap_or("")
                 .to_string(),
-            title: item.get("caption").and_then(|x| x.as_str()).map(|s| Tagged {
-                trust: Trust::External,
-                text: s.to_string(),
-            }),
+            title: item
+                .get("caption")
+                .and_then(|x| x.as_str())
+                .map(|s| Tagged {
+                    trust: Trust::External,
+                    text: s.to_string(),
+                }),
             class: item
                 .get("resourceClass")
                 .and_then(|x| x.as_str())

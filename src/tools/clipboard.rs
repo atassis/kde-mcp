@@ -114,10 +114,7 @@ async fn paste_bytes(mime: &str) -> Result<Vec<u8>, ToolError> {
 }
 
 fn closest(types: &[String], want: &str) -> Option<String> {
-    types
-        .iter()
-        .min_by_key(|t| levenshtein(t, want))
-        .cloned()
+    types.iter().min_by_key(|t| levenshtein(t, want)).cloned()
 }
 
 fn levenshtein(a: &str, b: &str) -> usize {
