@@ -4,8 +4,10 @@
 // times down vs. one binary per file.
 
 mod integration {
+    pub mod chord_parse;
     pub mod cli_parse;
     pub mod clipboard_offline;
+    pub mod keymap;
     pub mod lockfile;
     pub mod observe_offline;
     pub mod text_editor;

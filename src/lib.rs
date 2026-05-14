@@ -2,6 +2,7 @@ pub mod atspi;
 pub mod audit;
 pub mod cli;
 pub mod error;
+pub mod keymap;
 pub mod kwin;
 pub mod lock;
 pub mod mode;
