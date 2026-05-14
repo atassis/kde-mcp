@@ -14,7 +14,7 @@ git tag -l                # phase-0 should be present (phase-1 not yet tagged)
 cargo test --workspace    # 57 tests; should all pass in <5 s after build
 ```
 
-**Phases 0–6 code-complete.** Every tool from spec §6 has an implementation (read_text the only one still a stub; deferred to a tesseract-prober follow-up per ADR-0009). Policy gate cross-cuts every destructive tool. 110 tests pass, fmt + clippy clean.
+**Phases 0–6 code-complete + all deferrals addressed.** Every tool from spec §6 has a working implementation. Policy gate cross-cuts every destructive tool. Three abort routes (system tray, Meta+Esc, SIGUSR1). 110 tests pass, fmt + clippy clean.
 
 **Critical next step:** open `docs/TESTING-CHECKLIST.md` and run every checkbox you can. Live verification was deliberately deferred to a single batch so KDE notifications don't fire mid-session-by-session. The checklist is grouped by phase and ordered from lightest to heaviest live impact.
 
@@ -35,7 +35,7 @@ After the checklist is mostly green, tag whichever phase boundary you've validat
 ## Current status (2026-05-14, end of autonomous push)
 
 - **Phase:** **All MVP phases code-complete.** Live smoke verifies pending.
-- **Last commit:** `f342e65 feat(phase-6): real SHA-256 audit redaction + ADR-0009`.
+- **Last commit:** `17f36a8 docs(adr): record cancel UX in 0010 + update 0009 with deferral resolutions`.
 - **Tags:** `phase-0`, `phase-1` placed (local). `phase-2` through `phase-6` wait on live smoke.
 - **Branch:** `main`.
 - **Working tree:** clean.
