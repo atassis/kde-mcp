@@ -14,13 +14,16 @@ git tag -l                # phase-0 should be present (phase-1 not yet tagged)
 cargo test --workspace    # 57 tests; should all pass in <5 s after build
 ```
 
-**Phase 2 code-complete; live smoke pending user.** All 5 mutating tools (`mouse`, `keyboard.type`, `keyboard.key`, `clipboard_write`, `act_on_element`) implemented against libei + AT-SPI. Send isolation pattern locked in at `src/kwin/eis.rs` (reis's event stream is !Send; we run the handshake inside `spawn_blocking` + a current-thread runtime and only pass Send pieces back). 18 new unit tests for keymap + chord parser. 82 tests total pass; clippy clean.
+**Phases 0–6 code-complete.** Every tool from spec §6 has an implementation (read_text the only one still a stub; deferred to a tesseract-prober follow-up per ADR-0009). Policy gate cross-cuts every destructive tool. 110 tests pass, fmt + clippy clean.
 
-**Immediate next action when atassis returns:**
+**Critical next step:** open `docs/TESTING-CHECKLIST.md` and run every checkbox you can. Live verification was deliberately deferred to a single batch so KDE notifications don't fire mid-session-by-session. The checklist is grouped by phase and ordered from lightest to heaviest live impact.
 
-1. **Run live smoke §D** in `tests/integration/SMOKE.md` (5 fixtures D.1–D.5 covering keyboard.key, clipboard_write+read round-trip, mouse click, keyboard.type ASCII and non-ASCII clipboard-paste). D.6 (act_on_element end-to-end) is gated on a future Phase 4 focus tracker.
-2. If green: `git tag phase-2`. (Held back so user can debug failures first.)
-3. Decide path for Phase 3: policy gate (§6.0 — lock check, cancel check, tier check, per-app approval, sentinel warnings). OR pause for the generalization refactor (`docs/research/2026-05-14-generalization-paths.md`) before the policy gate cuts across more tools.
+After the checklist is mostly green, tag whichever phase boundary you've validated (`phase-2`, `phase-3`, `phase-4`, `phase-5`, `phase-6` in order).
+
+**Background reading worth a glance:**
+
+- `docs/adr/0009-phase-3-6-implementation-shape.md` — the 10 micro-decisions taken during the autonomous push (some are explicit YAGNI deferrals; flag any you want changed).
+- `docs/TESTING-CHECKLIST.md` — the master verification list. Includes a "bug-bounty" section of things that might be subtly wrong.
 
 **Background context worth revisiting:**
 
@@ -29,15 +32,15 @@ cargo test --workspace    # 57 tests; should all pass in <5 s after build
 
 ---
 
-## Current status (2026-05-14, end of day)
+## Current status (2026-05-14, end of autonomous push)
 
-- **Phase:** **Phase 2 code-complete; live smoke + tag pending.**
-- **Last commit:** `33d7b13 feat(phase-2): act_on_element via AT-SPI Action.do_action`.
-- **Tags:** `phase-0`, `phase-1` (local; no remote). `phase-2` waits on live smoke.
+- **Phase:** **All MVP phases code-complete.** Live smoke verifies pending.
+- **Last commit:** `f342e65 feat(phase-6): real SHA-256 audit redaction + ADR-0009`.
+- **Tags:** `phase-0`, `phase-1` placed (local). `phase-2` through `phase-6` wait on live smoke.
 - **Branch:** `main`.
 - **Working tree:** clean.
-- **Tests:** 82 passing (40 unit + 42 integration). `cargo fmt` clean, `cargo clippy --workspace --all-targets -- -D warnings` clean.
-- **`.desktop` install:** the dev `kde-mcp.desktop` at `~/.local/share/applications/` points to `target/release/kde-mcp` so KApplicationTrader authorises ScreenShot2. If you move the binary, re-run the templated install (or `cargo install --path . --root ~/.local` then update the `Exec=` line).
+- **Tests:** 110 passing (68 unit + 42 integration). `cargo fmt` clean, `cargo clippy --workspace --all-targets -- -D warnings` clean.
+- **`.desktop` install:** the dev `kde-mcp.desktop` at `~/.local/share/applications/` points to `target/release/kde-mcp` so KApplicationTrader authorises ScreenShot2. Re-templated on binary moves.
 
 ### Phase 1 progress
 
