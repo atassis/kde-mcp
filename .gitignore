@@ -1,4 +1,6 @@
 /target/
+# also ignore target/ for sub-crates such as examples/eis-keystroke-prober
+**/target/
 **/*.rs.bk
 *.pdb
 Cargo.lock.bak

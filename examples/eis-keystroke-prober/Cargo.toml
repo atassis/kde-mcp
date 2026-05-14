@@ -1,0 +1,32 @@
+[package]
+name = "eis-keystroke-prober"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.85"
+publish = false
+description = "Standalone POC: opens an EIS connection via KWin and emits Ctrl+Tab"
+
+# Intentionally NOT a workspace member of kde-mcp. This crate exists as a
+# reference for Phase 2 (libei keystroke injection); building it pulls in
+# reis + futures-util which Phase 0 doesn't otherwise need.
+#
+# Run with:
+#   cd examples/eis-keystroke-prober
+#   cargo run --release
+#
+# Prerequisite: be in a KDE Plasma 6 Wayland session with org.kde.KWin
+# accepting EIS connections. Make sure the window you want to receive the
+# keystroke is focused before the prober's `start_emulating` line fires
+# (~250 ms after launch).
+
+[dependencies]
+anyhow         = "1.0"
+tokio          = { version = "1.40", features = ["rt-multi-thread", "macros", "net", "time", "io-util", "sync"] }
+zbus           = { version = "5.15", default-features = false, features = ["tokio"] }
+zvariant       = "5.11"
+reis           = { version = "0.6.1", features = ["tokio"] }
+futures-util   = "0.3"
+
+[[bin]]
+name = "eis-keystroke-prober"
+path = "src/main.rs"

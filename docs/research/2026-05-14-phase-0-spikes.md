@@ -159,3 +159,45 @@ Phase 0 does not call this. Spec §13.1's Phase 0 spike checklist is satisfied b
 | Spike 0.5 | KWin EIS proxy declaration template recorded above. No Phase 0 impact. |
 
 These adjustments are applied in-flight during Tasks 1 and 11; the plan file is not edited (deltas are recorded here and in commit messages).
+
+---
+
+## Postscript — live EIS keystroke prober run (2026-05-14)
+
+During the Phase 0 end-of-task POC pass the user asked: "test API calls so we understand the future job is doable." After verifying the MCP wire end-to-end (initialise → tools/list → tools/call against the live binary, all 16 tool names + schemas + hints round-tripping correctly), the user further asked to verify the libei keystroke path — the riskiest unverified primitive across all remaining phases.
+
+A standalone prober crate was written at `examples/eis-keystroke-prober/` (committed to the repo as a permanent reference; not a workspace member of kde-mcp). It exercises the exact code path Phase 2's `keyboard.key` will use: zbus → `connectToEIS` → FD → `ei::Context::new` → `handshake_tokio(Sender)` → bind capabilities → wait for `DeviceAdded` + `DeviceResumed` → `start_emulating` → `Keyboard::key` + `Device::frame` → `stop_emulating`.
+
+### What worked
+
+End-to-end on the dev machine (CachyOS, KWin 6.x Wayland):
+
+1. `connectToEIS(1)` returned `(OwnedFd, connection_id)`. Handshake completed.
+2. `SeatAdded { name: "kde-mcp-eis-prober seat" }` fired; `bind_capabilities(Keyboard | Pointer | PointerAbsolute | Button | Scroll)` accepted.
+3. `DeviceAdded { name: "kde-mcp-eis-prober eis keyboard", type: Virtual, has_kb: true }` materialised the virtual keyboard.
+4. `DeviceResumed { serial: 2 }` signalled "ready for input emulation."
+5. `device.start_emulating(last_serial=2, sequence=0)`, then four key frames (Ctrl press / Tab press / Tab release / Ctrl release), then `stop_emulating`.
+6. Prober exited 0. The keystroke arrived at Brave (confirmed visually — pre-step: a KWin `workspace.activeWindow = brave_window` ran to focus Brave on Desktop 1).
+
+### Findings that update the Phase 2 plan (and worth noting in the spec)
+
+| Finding | Implication |
+|---|---|
+| **`flags = 1` enables SENDER mode** on `org.kde.KWin.EIS.RemoteDesktop.connectToEIS`. `flags = 0` opens a receiver-only connection: handshake completes and `SeatAdded` fires but no `DeviceAdded` ever arrives. The introspection (`i → hi`) doesn't document the bits; this was found empirically. | Phase 2's `src/kwin/eis.rs` must call `connect_to_eis(1)`. Recommend hard-coding `1` and adding a constant `const KWIN_EIS_FLAG_SENDER: i32 = 1;` with a comment pointing to this postscript. |
+| **Return type is the struct `(h, i)`, not two separate out-args.** D-Bus introspection notation was misleading; zbus correctly typechecks it as `(OwnedFd, i32)`. The `i32` is the connection id passed back to `disconnect`. | Proxy signature: `fn connect_to_eis(&self, flags: i32) -> zbus::Result<(zvariant::OwnedFd, i32)>`. Disconnect: `fn disconnect(&self, connection_id: i32) -> zbus::Result<()>`. |
+| **No `.desktop` / `X-KDE-DBUS-Restricted-Interfaces` registration was needed** for sender mode on this machine. The spec assumed (correctly, for `ScreenShot2`) the trader-check applied here too; it didn't. | Phase 0's smoke procedure already noted the `.desktop` install for ScreenShot2. EIS apparently doesn't go through `KApplicationTrader`. Phase 1 may discover this needs revisiting for sandboxed apps; document then. |
+| **`reis 0.6.1`'s tokio high-level API is sufficient.** `handshake_tokio` + `EiEventStream` + `match EiEvent::{SeatAdded, DeviceAdded, DeviceResumed}` covers the bring-up. Protocol methods are on `device.device()` (returns `&ei::Device`); the keyboard handle is `device.interface::<ei::Keyboard>()`. No need to drop to the low-level `context.read()` / `context.pending_event()` loop that `reis::examples::type-text.rs` uses. | Phase 2's `src/kwin/eis.rs` can stay at the high-level API. Simpler, fewer state-machine bugs. |
+| **`device.start_emulating(last_serial, sequence)` parameter order matters** despite `type-text.rs` calling it `(sequence, last_serial)`. Per the rustdoc signature, `last_serial` is the first parameter. The example works either way because both are `u32` and KWin appears tolerant; for correctness, follow the signature. | Phase 2 implementations should pass `(last_serial, sequence)` and not crib the parameter order from `type-text.rs` verbatim. |
+| **Keycodes are evdev raw** (Ctrl = 29, Tab = 15) when read from `linux/input-event-codes.h`. The `keycode - 8` form in `type-text.rs` exists because that example starts from xkb keycodes (= evdev + 8) via `xkbcommon`. | Phase 2's keymap layer must subtract 8 if it sources keycodes from `xkbcommon::Keymap`; nothing to subtract if it hard-codes evdev codes for known keys (e.g. arrow keys, modifiers, function keys). |
+| **Spec §13.1's Cargo deps need one more entry** for Phase 2: `futures-util = "0.3"`. The reis `EiEventStream` impls `futures::Stream` — to call `.next().await` on it you need `futures_util::StreamExt` in scope. | Add to §13.1 when Phase 2 starts; or wait until Phase 2's plan adds it. Either is fine; this postscript is the canonical reference. |
+
+### Reference crate left in-tree
+
+`examples/eis-keystroke-prober/` is a complete, standalone proof. It is intentionally not a workspace member of `kde-mcp` (its `reis` + `futures-util` dependencies are Phase 2 deps that Phase 0 doesn't need). To re-run the proof on a different machine or after a KDE update:
+
+```sh
+cd examples/eis-keystroke-prober
+cargo run --release
+```
+
+…with the target window focused. See `examples/eis-keystroke-prober/README.md`.
