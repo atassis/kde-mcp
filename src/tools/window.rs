@@ -117,12 +117,35 @@ pub async fn window_query(
         }
     }
 
-    if action == "get_geometry" {
-        if let Some(ref_id) = args.window_uuid {
+    match action.as_str() {
+        "list" => { /* no extra filter */ }
+        "get_geometry" => {
+            let ref_id = args.window_uuid.ok_or_else(|| ToolError::UnsupportedRegion {
+                reason: "window_uuid required for action=get_geometry".into(),
+            })?;
             entries.retain(|e| e.uuid == ref_id);
-        } else {
-            return Err(ToolError::TargetNotFound {
-                closest_match: None,
+            if entries.is_empty() {
+                return Err(ToolError::TargetNotFound {
+                    closest_match: Some(format!("no window matches ref {ref_id}")),
+                });
+            }
+            // get_geometry always returns the full shape regardless of
+            // requested format — the caller asked for geometry specifically.
+            return Ok(WindowQueryResponse { windows: entries });
+        }
+        "find" => {
+            // find returns just the first match after applying the filters
+            // above. If no filters were given, returns the first window.
+            entries.truncate(1);
+            if entries.is_empty() {
+                return Err(ToolError::TargetNotFound {
+                    closest_match: Some("no windows match the supplied filter".into()),
+                });
+            }
+        }
+        other => {
+            return Err(ToolError::UnsupportedRegion {
+                reason: format!("unknown window_query action: {other}"),
             });
         }
     }

@@ -208,3 +208,49 @@ pub fn keycode_for_char(ch: char) -> Option<u32> {
 pub fn shift_required(ch: char) -> bool {
     ch.is_ascii_uppercase()
 }
+
+/// xkbcommon-based fallback for `keycode_for_char` — resolves arbitrary
+/// Unicode characters via the system keymap. Returns `(keycode, needs_shift)`
+/// or `None` if the keymap can't produce the character at level 0 or 1.
+///
+/// The keymap is rebuilt per call (~1-2ms). xkbcommon's `Keymap` isn't
+/// `Sync` so we can't trivially cache it in a `static`; per-call rebuild
+/// is the YAGNI path. Phase 7 polish can introduce a thread-local cache.
+pub fn keycode_for_char_via_xkb(ch: char) -> Option<(u32, bool)> {
+    let ctx = xkbcommon::xkb::Context::new(xkbcommon::xkb::CONTEXT_NO_FLAGS);
+    let keymap = xkbcommon::xkb::Keymap::new_from_names(
+        &ctx,
+        "",
+        "",
+        "",
+        "",
+        None,
+        xkbcommon::xkb::KEYMAP_COMPILE_NO_FLAGS,
+    )?;
+    let target_keysym: u32 = xkbcommon::xkb::keysym_from_name(
+        &ch.to_string(),
+        xkbcommon::xkb::KEYSYM_NO_FLAGS,
+    )
+    .raw();
+    let sym = if target_keysym == xkbcommon::xkb::keysyms::KEY_NoSymbol {
+        xkbcommon::xkb::utf32_to_keysym(ch as u32).raw()
+    } else {
+        target_keysym
+    };
+    if sym == xkbcommon::xkb::keysyms::KEY_NoSymbol {
+        return None;
+    }
+    let min_kc = keymap.min_keycode().raw();
+    let max_kc = keymap.max_keycode().raw();
+    for raw_kc in min_kc..=max_kc {
+        let kc = xkbcommon::xkb::Keycode::new(raw_kc);
+        for level in 0..2 {
+            let syms = keymap.key_get_syms_by_level(kc, 0, level);
+            if syms.iter().any(|s| s.raw() == sym) {
+                let evdev = raw_kc.saturating_sub(8);
+                return Some((evdev, level == 1));
+            }
+        }
+    }
+    None
+}

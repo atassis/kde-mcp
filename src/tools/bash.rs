@@ -78,6 +78,13 @@ pub async fn bash(state: &KdeMcp, args: BashArgs) -> Result<BashResponse, ToolEr
                 stderr: format!("bash join: {e}"),
             })??;
 
+    // stdout/stderr demux: spec §6.2 lists them as separate fields, but a
+    // single PTY interleaves them by design. Splitting requires either two
+    // PTYs (loses the `cd /tmp; pwd` persistence the spec wants) or wrapping
+    // every command in `{ cmd; } 2> >(tee /tmp/err.N >&2)` boilerplate that
+    // pollutes the user's shell history. Per ADR-0009 §5, current shape
+    // returns merged content in stdout. The split is recorded as a
+    // testing-checklist follow-up, not a blocker.
     let (stdout, truncated_out) = truncate(outcome.stdout);
     let (stderr, _) = truncate(outcome.stderr);
     if truncated_out {

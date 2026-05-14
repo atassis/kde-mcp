@@ -80,12 +80,20 @@ pub async fn keyboard_type(
     session.flush()?;
 
     for ch in args.text.chars() {
-        let keycode = keycode_for_char(ch).ok_or_else(|| ToolError::UnsupportedRegion {
-            reason: format!(
-                "cannot type character {ch:?} via direct keymap; set use_clipboard=always"
-            ),
-        })?;
-        let shift = shift_required(ch);
+        // Prefer the hard-coded ASCII table for speed; fall back to
+        // xkbcommon for everything else (covers non-US layouts and
+        // common Latin-1 punctuation).
+        let (keycode, shift) = if let Some(kc) = keycode_for_char(ch) {
+            (kc, shift_required(ch))
+        } else if let Some((kc, sh)) = crate::keymap::keycode_for_char_via_xkb(ch) {
+            (kc, sh)
+        } else {
+            return Err(ToolError::UnsupportedRegion {
+                reason: format!(
+                    "cannot type character {ch:?} via the system keymap; set use_clipboard=always"
+                ),
+            });
+        };
         if shift {
             kb.key(KEY_LEFTSHIFT, ei::keyboard::KeyState::Press);
             device.frame(session.last_serial, EisSession::now_us());

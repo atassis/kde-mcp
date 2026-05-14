@@ -1,4 +1,5 @@
 use crate::atspi::ref_encoding::decode_element_ref;
+use std::time::Duration;
 use crate::error::ToolError;
 use crate::refs::{RefError, RefKind};
 use crate::server::KdeMcp;
@@ -29,17 +30,6 @@ pub async fn act_on_element(
     state: &KdeMcp,
     args: ActOnElementArgs,
 ) -> Result<ActOnElementResponse, ToolError> {
-    // Policy gate — target app derived from the currently-focused window.
-    // True spec §6.0 step 3 says "from the ref's owning window"; that
-    // requires window→AT-SPI app mapping which is deferred to Phase 4.
-    // For Phase 3 we approximate by the focused window's class.
-    let target_class = crate::policy_target::focused_class(state).await?;
-    let target = crate::policy_target::to_target(target_class);
-    let policy_warnings = state
-        .policy
-        .check(target, crate::policy::Action::Generic)
-        .await?;
-
     let meta = state
         .refs
         .resolve(&args.element_ref)
@@ -49,6 +39,20 @@ pub async fn act_on_element(
                 ref_id: args.element_ref.clone(),
             },
         })?;
+
+    // Policy gate — target derived from the ref's owning window per spec
+    // §6.0 step 3. We resolve via the element's AT-SPI bus name's pid →
+    // KWin window with matching pid → resourceClass. Falls back to the
+    // focused-window class if the lookup fails.
+    let target_class = match owning_class_for_element_ref(state, &meta.payload).await {
+        Ok(Some(c)) => Some(c),
+        _ => crate::policy_target::focused_class(state).await?,
+    };
+    let target = crate::policy_target::to_target(target_class);
+    let policy_warnings = state
+        .policy
+        .check(target, crate::policy::Action::Generic)
+        .await?;
     if meta.kind != RefKind::Element {
         return Err(ToolError::UnsupportedRegion {
             reason: format!("ref {} is not an element", args.element_ref),
@@ -132,4 +136,50 @@ pub async fn act_on_element(
         ok: true,
         action_invoked: actions[idx as usize].name.clone(),
     })
+}
+
+/// Map an element ref's encoded bus name → pid via `GetConnectionUnixProcessID`
+/// → matching KWin window's resourceClass. Returns None if any step fails
+/// (caller falls back to focused-window heuristic).
+async fn owning_class_for_element_ref(
+    state: &KdeMcp,
+    payload: &str,
+) -> Result<Option<String>, ToolError> {
+    let (bus, _path) = match decode_element_ref(payload) {
+        Some(p) => p,
+        None => return Ok(None),
+    };
+    let conn = state.atspi.get().await?;
+    let dbus = zbus::fdo::DBusProxy::new(conn.connection())
+        .await
+        .map_err(|e| ToolError::BusDisconnected {
+            detail: e.to_string(),
+        })?;
+    let bus_name = match zbus::names::BusName::try_from(bus.to_string()) {
+        Ok(n) => n,
+        Err(_) => return Ok(None),
+    };
+    let pid = match dbus.get_connection_unix_process_id(bus_name).await {
+        Ok(p) => p as i64,
+        Err(_) => return Ok(None),
+    };
+    // KWin script: find the window with this pid, return its class.
+    let body = format!(
+        r#"
+        var ws = workspace;
+        var list = ws.windowList();
+        for (var i = 0; i < list.length; i++) {{
+            if (list[i].pid === {pid}) {{
+                return {{ class: list[i].resourceClass || "" }};
+            }}
+        }}
+        return {{ class: "" }};
+        "#
+    );
+    let resp = crate::kwin::scripting::run_script(&state.bus, &body, Duration::from_secs(2)).await?;
+    let v: serde_json::Value = serde_json::from_str(&resp).unwrap_or(serde_json::Value::Null);
+    Ok(v.get("class")
+        .and_then(|c| c.as_str())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string()))
 }
