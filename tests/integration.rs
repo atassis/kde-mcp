@@ -6,4 +6,5 @@
 mod integration {
     pub mod cli_parse;
     pub mod lockfile;
+    pub mod tools_list;
 }
