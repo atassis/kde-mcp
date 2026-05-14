@@ -58,6 +58,12 @@ portable-pty   = "0.9"
 strip-ansi-escapes = "0.2"
 tokio-util     = "0.7"
 
+# Deferral push (2026-05-15):
+ksni           = "0.3"
+xkbcommon      = "0.9"
+tesseract      = "0.15"
+parking_lot    = "0.12"
+
 [dev-dependencies]
 tempfile       = "3.10"
 

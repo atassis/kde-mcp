@@ -34,26 +34,14 @@ pub struct KdeMcp {
     pub atspi: Arc<crate::atspi::connection::AtspiConnection>,
     pub policy: crate::policy::SharedPolicyGate,
     pub bash_session: Arc<std::sync::Mutex<Option<crate::tools::bash::BashSession>>>,
+    pub tray: Arc<crate::tray::TrayState>,
     pub tool_router: ToolRouter<KdeMcp>,
 }
 
 impl KdeMcp {
     pub fn new(mode: Mode, audit: Arc<AuditLog>, bus: zbus::Connection) -> Self {
-        let config = crate::policy::PolicyConfig::load_default().unwrap_or_default();
-        let policy = Arc::new(crate::policy::PolicyGate::new(
-            config,
-            tokio_util::sync::CancellationToken::new(),
-        ));
-        Self {
-            mode,
-            refs: Arc::new(RefStore::new(Duration::from_secs(60))),
-            audit,
-            bus,
-            atspi: Arc::new(crate::atspi::connection::AtspiConnection::default()),
-            policy,
-            bash_session: Arc::new(std::sync::Mutex::new(None)),
-            tool_router: Self::tool_router(),
-        }
+        let cancel = tokio_util::sync::CancellationToken::new();
+        Self::new_with_cancel(mode, audit, bus, cancel)
     }
 
     /// Variant used by `src/main.rs` to install the cancel-shortcut token.
@@ -64,7 +52,8 @@ impl KdeMcp {
         cancel: tokio_util::sync::CancellationToken,
     ) -> Self {
         let config = crate::policy::PolicyConfig::load_default().unwrap_or_default();
-        let policy = Arc::new(crate::policy::PolicyGate::new(config, cancel));
+        let policy = Arc::new(crate::policy::PolicyGate::new(config, cancel.clone()));
+        let tray = crate::tray::TrayState::new(cancel);
         Self {
             mode,
             refs: Arc::new(RefStore::new(Duration::from_secs(60))),
@@ -73,6 +62,7 @@ impl KdeMcp {
             atspi: Arc::new(crate::atspi::connection::AtspiConnection::default()),
             policy,
             bash_session: Arc::new(std::sync::Mutex::new(None)),
+            tray,
             tool_router: Self::tool_router(),
         }
     }
@@ -93,7 +83,8 @@ impl KdeMcp {
         let v = serde_json::to_value(&args).unwrap_or(serde_json::Value::Null);
         let audit = self.audit.clone();
         let mode = self.mode.as_str();
-        Ok(dispatch_audited(audit, mode, "observe", v, async move {
+        let tray = self.tray.clone();
+        Ok(dispatch_audited(audit, tray, mode, "observe", v, async move {
             tools::observe::observe(self, args).await
         })
         .await)
@@ -110,7 +101,8 @@ impl KdeMcp {
         let v = serde_json::to_value(&args).unwrap_or(serde_json::Value::Null);
         let audit = self.audit.clone();
         let mode = self.mode.as_str();
-        Ok(dispatch_audited(audit, mode, "inspect", v, async move {
+        let tray = self.tray.clone();
+        Ok(dispatch_audited(audit, tray, mode, "inspect", v, async move {
             tools::inspect::inspect(self, args).await
         })
         .await)
@@ -127,7 +119,8 @@ impl KdeMcp {
         let v = serde_json::to_value(&args).unwrap_or(serde_json::Value::Null);
         let audit = self.audit.clone();
         let mode = self.mode.as_str();
-        Ok(dispatch_audited(audit, mode, "screenshot", v, async move {
+        let tray = self.tray.clone();
+        Ok(dispatch_audited(audit, tray, mode, "screenshot", v, async move {
             tools::screenshot::screenshot(self, args).await
         })
         .await)
@@ -144,7 +137,8 @@ impl KdeMcp {
         let v = serde_json::to_value(&args).unwrap_or(serde_json::Value::Null);
         let audit = self.audit.clone();
         let mode = self.mode.as_str();
-        Ok(dispatch_audited(audit, mode, "read_text", v, async move {
+        let tray = self.tray.clone();
+        Ok(dispatch_audited(audit, tray, mode, "read_text", v, async move {
             tools::read_text::read_text(self, args).await
         })
         .await)
@@ -161,7 +155,8 @@ impl KdeMcp {
         let v = serde_json::to_value(&args).unwrap_or(serde_json::Value::Null);
         let audit = self.audit.clone();
         let mode = self.mode.as_str();
-        Ok(dispatch_audited(audit, mode, "wait", v, async move {
+        let tray = self.tray.clone();
+        Ok(dispatch_audited(audit, tray, mode, "wait", v, async move {
             tools::wait::wait(self, args).await
         })
         .await)
@@ -180,8 +175,9 @@ impl KdeMcp {
         let v = serde_json::to_value(&args).unwrap_or(serde_json::Value::Null);
         let audit = self.audit.clone();
         let mode = self.mode.as_str();
+        let tray = self.tray.clone();
         Ok(
-            dispatch_audited(audit, mode, "act_on_element", v, async move {
+            dispatch_audited(audit, tray, mode, "act_on_element", v, async move {
                 tools::act_on_element::act_on_element(self, args).await
             })
             .await,
@@ -199,7 +195,8 @@ impl KdeMcp {
         let v = serde_json::to_value(&args).unwrap_or(serde_json::Value::Null);
         let audit = self.audit.clone();
         let mode = self.mode.as_str();
-        Ok(dispatch_audited(audit, mode, "mouse", v, async move {
+        let tray = self.tray.clone();
+        Ok(dispatch_audited(audit, tray, mode, "mouse", v, async move {
             tools::mouse::mouse(self, args).await
         })
         .await)
@@ -217,8 +214,9 @@ impl KdeMcp {
         let v = serde_json::to_value(&args).unwrap_or(serde_json::Value::Null);
         let audit = self.audit.clone();
         let mode = self.mode.as_str();
+        let tray = self.tray.clone();
         Ok(
-            dispatch_audited(audit, mode, "keyboard.type", v, async move {
+            dispatch_audited(audit, tray, mode, "keyboard.type", v, async move {
                 tools::keyboard::keyboard_type(self, args).await
             })
             .await,
@@ -237,8 +235,9 @@ impl KdeMcp {
         let v = serde_json::to_value(&args).unwrap_or(serde_json::Value::Null);
         let audit = self.audit.clone();
         let mode = self.mode.as_str();
+        let tray = self.tray.clone();
         Ok(
-            dispatch_audited(audit, mode, "keyboard.key", v, async move {
+            dispatch_audited(audit, tray, mode, "keyboard.key", v, async move {
                 tools::keyboard::keyboard_key(self, args).await
             })
             .await,
@@ -258,8 +257,9 @@ impl KdeMcp {
         let v = serde_json::to_value(&args).unwrap_or(serde_json::Value::Null);
         let audit = self.audit.clone();
         let mode = self.mode.as_str();
+        let tray = self.tray.clone();
         Ok(
-            dispatch_audited(audit, mode, "window_query", v, async move {
+            dispatch_audited(audit, tray, mode, "window_query", v, async move {
                 tools::window::window_query(self, args).await
             })
             .await,
@@ -277,8 +277,9 @@ impl KdeMcp {
         let v = serde_json::to_value(&args).unwrap_or(serde_json::Value::Null);
         let audit = self.audit.clone();
         let mode = self.mode.as_str();
+        let tray = self.tray.clone();
         Ok(
-            dispatch_audited(audit, mode, "window_control", v, async move {
+            dispatch_audited(audit, tray, mode, "window_control", v, async move {
                 tools::window::window_control(self, args).await
             })
             .await,
@@ -296,8 +297,9 @@ impl KdeMcp {
         let v = serde_json::to_value(&args).unwrap_or(serde_json::Value::Null);
         let audit = self.audit.clone();
         let mode = self.mode.as_str();
+        let tray = self.tray.clone();
         Ok(
-            dispatch_audited(audit, mode, "clipboard_read", v, async move {
+            dispatch_audited(audit, tray, mode, "clipboard_read", v, async move {
                 tools::clipboard::clipboard_read(self, args).await
             })
             .await,
@@ -315,8 +317,9 @@ impl KdeMcp {
         let v = serde_json::to_value(&args).unwrap_or(serde_json::Value::Null);
         let audit = self.audit.clone();
         let mode = self.mode.as_str();
+        let tray = self.tray.clone();
         Ok(
-            dispatch_audited(audit, mode, "clipboard_write", v, async move {
+            dispatch_audited(audit, tray, mode, "clipboard_write", v, async move {
                 tools::clipboard::clipboard_write(self, args).await
             })
             .await,
@@ -336,7 +339,8 @@ impl KdeMcp {
         let v = serde_json::to_value(&args).unwrap_or(serde_json::Value::Null);
         let audit = self.audit.clone();
         let mode = self.mode.as_str();
-        Ok(dispatch_audited(audit, mode, "bash", v, async move {
+        let tray = self.tray.clone();
+        Ok(dispatch_audited(audit, tray, mode, "bash", v, async move {
             tools::bash::bash(self, args).await
         })
         .await)
@@ -354,8 +358,9 @@ impl KdeMcp {
         let v = serde_json::to_value(&args).unwrap_or(serde_json::Value::Null);
         let audit = self.audit.clone();
         let mode = self.mode.as_str();
+        let tray = self.tray.clone();
         Ok(
-            dispatch_audited(audit, mode, "text_editor.view", v, async move {
+            dispatch_audited(audit, tray, mode, "text_editor.view", v, async move {
                 tools::text_editor::text_editor_view(self, args).await
             })
             .await,
@@ -374,8 +379,9 @@ impl KdeMcp {
         let v = serde_json::to_value(&args).unwrap_or(serde_json::Value::Null);
         let audit = self.audit.clone();
         let mode = self.mode.as_str();
+        let tray = self.tray.clone();
         Ok(
-            dispatch_audited(audit, mode, "text_editor.edit", v, async move {
+            dispatch_audited(audit, tray, mode, "text_editor.edit", v, async move {
                 tools::text_editor::text_editor_edit(self, args).await
             })
             .await,
@@ -408,6 +414,7 @@ impl ServerHandler for KdeMcp {
 ///   `?`-bubble it.
 pub(crate) async fn dispatch_audited<F, T>(
     audit: Arc<AuditLog>,
+    tray: Arc<crate::tray::TrayState>,
     mode: &'static str,
     tool: &'static str,
     args: serde_json::Value,
@@ -417,6 +424,7 @@ where
     F: std::future::Future<Output = Result<T, ToolError>>,
     T: serde::Serialize,
 {
+    let _guard = crate::tray::TrayGuard::enter(&tray, tool);
     let started = std::time::Instant::now();
     let outcome = fut.await;
     let duration_ms = started.elapsed().as_millis() as u64;
@@ -470,8 +478,11 @@ mod tests {
     async fn dispatch_audited_writes_a_record_on_success() {
         let (_dir, audit) = fresh_audit().await;
         let path = _dir.path().join("a.jsonl");
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let tray = crate::tray::TrayState::new(cancel);
         let r = dispatch_audited(
             audit.clone(),
+            tray,
             "live",
             "observe",
             serde_json::json!({"detail": "summary"}),
@@ -493,8 +504,11 @@ mod tests {
     async fn dispatch_audited_writes_a_record_on_error() {
         let (_dir, audit) = fresh_audit().await;
         let path = _dir.path().join("a.jsonl");
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let tray = crate::tray::TrayState::new(cancel);
         let r = dispatch_audited(
             audit.clone(),
+            tray,
             "live",
             "clipboard_write",
             serde_json::json!({"content": "secret"}),

@@ -53,10 +53,13 @@ async fn main() -> Result<()> {
     );
     tracing::info!(audit = %audit_path.display(), "audit log open");
 
-    // Install the Meta+Esc cancel token (currently SIGUSR1 fallback; see
-    // src/cancel.rs for the KGlobalAccel roadmap).
+    // Install the Meta+Esc cancel token. KGlobalAccel registration is best-
+    // effort; SIGUSR1 always works as fallback (`pkill -USR1 kde-mcp`).
     let cancel = kde_mcp::cancel::install(&bootstrapped.bus).await;
     let server = KdeMcp::new_with_cancel(cli.mode, audit_log, bootstrapped.bus, cancel);
+    // System-tray indicator + abort menu (StatusNotifierItem). Runs on its
+    // own thread/runtime; failures are warnings only.
+    kde_mcp::tray::spawn(server.tray.clone());
 
     eprintln!("kde-mcp: ready (mode={mode_name})");
 
