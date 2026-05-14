@@ -14,31 +14,30 @@ git tag -l                # phase-0 should be present (phase-1 not yet tagged)
 cargo test --workspace    # 57 tests; should all pass in <5 s after build
 ```
 
-Phase 1 is **in flight, ~70% complete.** Tasks 0–10 of the 14-task Phase 1 plan are merged; Tasks 11–14 (AT-SPI infrastructure, `inspect`, `observe`, final verification + tag) are pending and require user direction. See "Phase 1 progress" below.
+Phase 1 is **code-complete; awaits live smoke + tag.** All 14 plan tasks have their code merged (some with deliberate first-cut scope: `inspect target=focused/window:<ref>` returns `not_implemented`; `observe.focused_element` is always null with a warning). Live verification against the user's real KDE session is the only remaining step before tagging `phase-1`.
 
 **Immediate next action when atassis returns:**
 
-1. Read `docs/plans/2026-05-14-phase-1-readonly-tools.md` §"Pre-plan caveats and resolved decisions" for the **one design relabel** that happened during planning. HANDOFF said "write-to-temp-file"; reality is the kdotool-style caller-hosted D-Bus receiver (KWin's QJSEngine has no file I/O). Implementation is ~60 LoC at `src/kwin/scripting.rs`. Confirm or override.
-2. Install `wl-clipboard` so `clipboard_read`'s live spot-check can run: `sudo pacman -S wl-clipboard` (Arch).
-3. Run the live smoke checks deferred during autonomous execution:
-   - `text_editor.view` — already unit-tested over tempfiles; trivial.
-   - `clipboard_read` — `wl-paste` against real session after install.
-   - `window_query` — `--mode=live` invocation.
-   - `screenshot` — `--mode=live` invocation.
-   Each `--mode=live` invocation fires the "Claude is using your computer" KDE notification, which is why they were deferred.
-4. Decide on Task 11 (AT-SPI infrastructure) scope: the plan's first cut returns `focused_element = null` with a warning rather than running a background focus-tracker. Confirm or override.
-5. Resume the plan from Task 11 in a fresh subagent / executing-plans session.
+1. **Run the live smoke procedure** in `tests/integration/SMOKE.md` §C (7 fixtures covering text_editor.view, clipboard_read, window_query, screenshot, observe, inspect, audit). Each `cargo run --release -- --mode=live` invocation fires the "Claude is using your computer" KDE notification, which is why this was deferred. Copy "kde-mcp test" into the clipboard before C.2 (`clipboard_read`).
+2. If anything is red, debug + commit fix.
+3. If green: `git tag phase-1`. Phase 1 done.
+4. Pick a path for Phase 2 (input emulation via libei — the EIS prober already de-risked this; spec §14 row 2 has the scope).
+
+**Background context the user may want to revisit:**
+
+- `docs/plans/2026-05-14-phase-1-readonly-tools.md` §"Pre-plan caveats" — the one design relabel (HANDOFF's "write-to-temp-file" → kdotool-style caller-hosted D-Bus receiver, because KWin's QJSEngine has no file I/O). Implementation is ~60 LoC at `src/kwin/scripting.rs`.
+- The 3 first-cut deferrals (`inspect target=focused`, `inspect target=window:`, `observe.focused_element`) are recorded in HANDOFF below and in `tests/integration/SMOKE.md` §"Known not-yet-implemented". They lift in Phase 4.
 
 ---
 
 ## Current status (2026-05-14, evening)
 
-- **Phase:** **Phase 1 in flight** — 10 of 14 tasks implemented + merged; 4 remaining.
-- **Last commit:** `864a862 feat(phase-1): screenshot tool with terminal-class masking`.
-- **Tag:** `phase-0` (local; not pushed). `phase-1` not yet tagged (waiting on Tasks 11–14).
+- **Phase:** **Phase 1 code-complete; live smoke + tag pending.**
+- **Last commit:** `f503bc6 docs(phase-1): SMOKE.md §C live read-only fixtures + minor observe fix`.
+- **Tag:** `phase-0` (local; not pushed). `phase-1` not yet tagged (waiting on live smoke green).
 - **Branch:** `main` (single branch; no remote configured).
 - **Working tree:** clean.
-- **Tests:** 57 passing (35 unit + 22 integration). `cargo fmt` clean, `cargo clippy --workspace --all-targets -- -D warnings` clean.
+- **Tests:** 64 passing (40 unit + 24 integration). `cargo fmt` clean, `cargo clippy --workspace --all-targets -- -D warnings` clean.
 
 ### Phase 1 progress
 
@@ -55,25 +54,28 @@ Phase 1 is **in flight, ~70% complete.** Tasks 0–10 of the 14-task Phase 1 pla
 | 8 — screenshot tool | Done | Region encoding (untagged enum: string OR `[x,y,w,h]`), capture, PNG re-encode. **Untested live.** |
 | 9 — image utils | Done | Resize-to-long-edge + black-rectangle mask. 6 unit tests including bounds-clamping. |
 | 10 — terminal masking | Done | Folded into commit `864a862`. Self-shot exemption implemented (capturing `window:<terminal-ref>` masks other terminals but not the targeted one). Fallback to unmasked + warning if window-enumeration fails. **Untested live.** |
-| 11 — AT-SPI infra | **Pending** | Plan ships pseudocode for `walk()`; final fn names per Task 0.1 spike. Risky — needs live a11y bus to validate. See plan §Task 11. |
-| 12 — inspect | **Pending** | Depends on Task 11. Plan defers `inspect target="window:<ref>"` to Phase 4 (window→AT-SPI mapping). |
-| 13 — observe | **Pending** | Depends on Tasks 5 + 11. Plan ships `focused_element = null + warning` for the first cut. |
-| 14 — verify + tag | **Pending** | Full SMOKE.md refresh + `git tag phase-1`. |
+| 11 — AT-SPI infra | Done | `src/atspi/{connection,tree,ref_encoding}.rs`. BFS walker with best-effort per-node fetches (role + name core; bbox/actions/value peripheral via `Proxies` extension). 5 ref_encoding unit tests. **Untested live.** |
+| 12 — inspect | Done | `target="element:<ref>"` walks via Task 11. `target="focused"` and `target="window:<ref>"` return `not_implemented` per spec deferrals to Phase 4. **Untested live.** |
+| 13 — observe | Done | Composes KWin script (cursor, focused window, windows, screens) with `focused_element: null + warning` per first cut. 2 offline shape-parity tests. **Untested live.** |
+| 14 — verify + tag | **Pending** | Live smoke `SMOKE.md` §C (7 fixtures) + `git tag phase-1`. The smoke is gated on user availability — each `--mode=live` run fires the KDE notification. |
 
 ### What's been verified
 
-- 57 cargo tests pass (unit + integration).
+- 64 cargo tests pass (40 unit + 24 integration).
 - `cargo fmt` + `cargo clippy --all-targets -- -D warnings` clean.
-- One end-of-Task-2 smoke run confirmed audit-log dispatch writes per-call (`{"tool":"observe","ok":false,"duration_ms":0,"code":"not_implemented"}` lands in `~/.local/state/kde-mcp/audit.jsonl`).
+- One end-of-Task-2 smoke run confirmed audit-log dispatch writes per-call (`{"tool":"observe","ok":false,"duration_ms":0,"code":"not_implemented"}` lands in `~/.local/state/kde-mcp/audit.jsonl`). Three smoke runs total during autonomous execution — apologies for the KDE notifications.
 
-### What was deliberately NOT live-tested (per user's "don't change session state" directive)
+### What still needs live verification
 
-- Tasks 5–10 wire-level invocations against the real KWin session. Each `--mode=live` startup fires the "Claude is using your computer" KDE notification, and a `screenshot` call would capture the user's actual screen. Recommended live-test order after user returns:
-  1. `window_query action=list` (the lightest live test; KWin script + parse).
-  2. `screenshot region=active_screen` (verifies ScreenShot2 + image encode).
-  3. `screenshot region=full` (verifies terminal masking against a real desktop).
-  4. `screenshot region=window:<ref>` after grabbing a `window_query` ref.
-- `clipboard_read` live verification — gated on `pacman -S wl-clipboard`.
+`tests/integration/SMOKE.md` §C has 7 fixtures (C.1–C.7) covering every Phase 1 tool. Each one is a self-contained JSON-RPC handshake piped at `target/release/kde-mcp --mode=live`. Recommended order:
+
+1. **C.1** `text_editor.view` — pure file I/O; safest first sanity check.
+2. **C.2** `clipboard_read` — needs `wl-clipboard` installed; copy "kde-mcp test" to the clipboard before running.
+3. **C.3** `window_query action=list` — lightest live test of the KWin script runner end-to-end.
+4. **C.4** `screenshot region=active_screen` — first live screenshot; verifies ScreenShot2 + PNG encode + masking.
+5. **C.5** `observe detail=interactive` — composes KWin script with focused-window + screens.
+6. **C.7** Audit log per-call check — `~/.local/state/kde-mcp/audit.jsonl` should gain one record per `tools/call` with the wire tool name.
+7. **C.6** `inspect target="element:<ref>"` — needs a previous mint, deferred to Phase 4 SMOKE addendum.
 
 ### What Phase 0 shipped
 
