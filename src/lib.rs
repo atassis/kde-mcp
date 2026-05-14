@@ -5,4 +5,5 @@ pub mod lock;
 pub mod mode;
 pub mod notify;
 pub mod refs;
+pub mod tools;
 pub mod trust;
