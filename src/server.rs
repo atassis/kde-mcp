@@ -5,7 +5,13 @@
 //! constructor → E0592). The 16 wire-named tools therefore live in one
 //! `#[tool_router] impl KdeMcp` block below. Comment dividers preserve the
 //! four-category grouping the spec §6 catalogue uses.
+//!
+//! Phase 1: every dispatch routes through `dispatch_audited`, which serialises
+//! the args (with redaction), runs the tool future, times it, writes one
+//! `AuditRecord` per call, and converts the `Result<T, ToolError>` into the
+//! structured `CallToolResult` shape per spec §8.
 
+use crate::audit::AuditLog;
 use crate::cli::Mode;
 use crate::error::ToolError;
 use crate::refs::RefStore;
@@ -23,14 +29,20 @@ use std::time::Duration;
 pub struct KdeMcp {
     pub mode: Mode,
     pub refs: Arc<RefStore>,
+    pub audit: Arc<AuditLog>,
+    pub bus: zbus::Connection,
+    pub atspi: Arc<crate::atspi::connection::AtspiConnection>,
     pub tool_router: ToolRouter<KdeMcp>,
 }
 
 impl KdeMcp {
-    pub fn new(mode: Mode) -> Self {
+    pub fn new(mode: Mode, audit: Arc<AuditLog>, bus: zbus::Connection) -> Self {
         Self {
             mode,
             refs: Arc::new(RefStore::new(Duration::from_secs(60))),
+            audit,
+            bus,
+            atspi: Arc::new(crate::atspi::connection::AtspiConnection::default()),
             tool_router: Self::tool_router(),
         }
     }
@@ -48,7 +60,13 @@ impl KdeMcp {
         &self,
         Parameters(args): Parameters<tools::observe::ObserveArgs>,
     ) -> Result<CallToolResult, McpError> {
-        Ok(tool_result(tools::observe::observe(args).await))
+        let v = serde_json::to_value(&args).unwrap_or(serde_json::Value::Null);
+        let audit = self.audit.clone();
+        let mode = self.mode.as_str();
+        Ok(dispatch_audited(audit, mode, "observe", v, async move {
+            tools::observe::observe(self, args).await
+        })
+        .await)
     }
 
     #[tool(
@@ -59,7 +77,13 @@ impl KdeMcp {
         &self,
         Parameters(args): Parameters<tools::inspect::InspectArgs>,
     ) -> Result<CallToolResult, McpError> {
-        Ok(tool_result(tools::inspect::inspect(args).await))
+        let v = serde_json::to_value(&args).unwrap_or(serde_json::Value::Null);
+        let audit = self.audit.clone();
+        let mode = self.mode.as_str();
+        Ok(dispatch_audited(audit, mode, "inspect", v, async move {
+            tools::inspect::inspect(self, args).await
+        })
+        .await)
     }
 
     #[tool(
@@ -70,7 +94,13 @@ impl KdeMcp {
         &self,
         Parameters(args): Parameters<tools::screenshot::ScreenshotArgs>,
     ) -> Result<CallToolResult, McpError> {
-        Ok(tool_result(tools::screenshot::screenshot(args).await))
+        let v = serde_json::to_value(&args).unwrap_or(serde_json::Value::Null);
+        let audit = self.audit.clone();
+        let mode = self.mode.as_str();
+        Ok(dispatch_audited(audit, mode, "screenshot", v, async move {
+            tools::screenshot::screenshot(self, args).await
+        })
+        .await)
     }
 
     #[tool(
@@ -81,7 +111,13 @@ impl KdeMcp {
         &self,
         Parameters(args): Parameters<tools::read_text::ReadTextArgs>,
     ) -> Result<CallToolResult, McpError> {
-        Ok(tool_result(tools::read_text::read_text(args).await))
+        let v = serde_json::to_value(&args).unwrap_or(serde_json::Value::Null);
+        let audit = self.audit.clone();
+        let mode = self.mode.as_str();
+        Ok(dispatch_audited(audit, mode, "read_text", v, async move {
+            tools::read_text::read_text(self, args).await
+        })
+        .await)
     }
 
     #[tool(
@@ -92,7 +128,13 @@ impl KdeMcp {
         &self,
         Parameters(args): Parameters<tools::wait::WaitArgs>,
     ) -> Result<CallToolResult, McpError> {
-        Ok(tool_result(tools::wait::wait(args).await))
+        let v = serde_json::to_value(&args).unwrap_or(serde_json::Value::Null);
+        let audit = self.audit.clone();
+        let mode = self.mode.as_str();
+        Ok(dispatch_audited(audit, mode, "wait", v, async move {
+            tools::wait::wait(self, args).await
+        })
+        .await)
     }
 
     // ---- Action (destructive) ----
@@ -105,9 +147,13 @@ impl KdeMcp {
         &self,
         Parameters(args): Parameters<tools::act_on_element::ActOnElementArgs>,
     ) -> Result<CallToolResult, McpError> {
-        Ok(tool_result(
-            tools::act_on_element::act_on_element(args).await,
-        ))
+        let v = serde_json::to_value(&args).unwrap_or(serde_json::Value::Null);
+        let audit = self.audit.clone();
+        let mode = self.mode.as_str();
+        Ok(dispatch_audited(audit, mode, "act_on_element", v, async move {
+            tools::act_on_element::act_on_element(self, args).await
+        })
+        .await)
     }
 
     #[tool(
@@ -118,7 +164,13 @@ impl KdeMcp {
         &self,
         Parameters(args): Parameters<tools::mouse::MouseArgs>,
     ) -> Result<CallToolResult, McpError> {
-        Ok(tool_result(tools::mouse::mouse(args).await))
+        let v = serde_json::to_value(&args).unwrap_or(serde_json::Value::Null);
+        let audit = self.audit.clone();
+        let mode = self.mode.as_str();
+        Ok(dispatch_audited(audit, mode, "mouse", v, async move {
+            tools::mouse::mouse(self, args).await
+        })
+        .await)
     }
 
     #[tool(
@@ -130,7 +182,13 @@ impl KdeMcp {
         &self,
         Parameters(args): Parameters<tools::keyboard::KeyboardTypeArgs>,
     ) -> Result<CallToolResult, McpError> {
-        Ok(tool_result(tools::keyboard::keyboard_type(args).await))
+        let v = serde_json::to_value(&args).unwrap_or(serde_json::Value::Null);
+        let audit = self.audit.clone();
+        let mode = self.mode.as_str();
+        Ok(dispatch_audited(audit, mode, "keyboard.type", v, async move {
+            tools::keyboard::keyboard_type(self, args).await
+        })
+        .await)
     }
 
     #[tool(
@@ -142,7 +200,13 @@ impl KdeMcp {
         &self,
         Parameters(args): Parameters<tools::keyboard::KeyboardKeyArgs>,
     ) -> Result<CallToolResult, McpError> {
-        Ok(tool_result(tools::keyboard::keyboard_key(args).await))
+        let v = serde_json::to_value(&args).unwrap_or(serde_json::Value::Null);
+        let audit = self.audit.clone();
+        let mode = self.mode.as_str();
+        Ok(dispatch_audited(audit, mode, "keyboard.key", v, async move {
+            tools::keyboard::keyboard_key(self, args).await
+        })
+        .await)
     }
 
     // ---- Window + clipboard (mixed) ----
@@ -155,7 +219,13 @@ impl KdeMcp {
         &self,
         Parameters(args): Parameters<tools::window::WindowQueryArgs>,
     ) -> Result<CallToolResult, McpError> {
-        Ok(tool_result(tools::window::window_query(args).await))
+        let v = serde_json::to_value(&args).unwrap_or(serde_json::Value::Null);
+        let audit = self.audit.clone();
+        let mode = self.mode.as_str();
+        Ok(dispatch_audited(audit, mode, "window_query", v, async move {
+            tools::window::window_query(self, args).await
+        })
+        .await)
     }
 
     #[tool(
@@ -166,7 +236,13 @@ impl KdeMcp {
         &self,
         Parameters(args): Parameters<tools::window::WindowControlArgs>,
     ) -> Result<CallToolResult, McpError> {
-        Ok(tool_result(tools::window::window_control(args).await))
+        let v = serde_json::to_value(&args).unwrap_or(serde_json::Value::Null);
+        let audit = self.audit.clone();
+        let mode = self.mode.as_str();
+        Ok(dispatch_audited(audit, mode, "window_control", v, async move {
+            tools::window::window_control(self, args).await
+        })
+        .await)
     }
 
     #[tool(
@@ -177,7 +253,13 @@ impl KdeMcp {
         &self,
         Parameters(args): Parameters<tools::clipboard::ClipboardReadArgs>,
     ) -> Result<CallToolResult, McpError> {
-        Ok(tool_result(tools::clipboard::clipboard_read(args).await))
+        let v = serde_json::to_value(&args).unwrap_or(serde_json::Value::Null);
+        let audit = self.audit.clone();
+        let mode = self.mode.as_str();
+        Ok(dispatch_audited(audit, mode, "clipboard_read", v, async move {
+            tools::clipboard::clipboard_read(self, args).await
+        })
+        .await)
     }
 
     #[tool(
@@ -188,7 +270,13 @@ impl KdeMcp {
         &self,
         Parameters(args): Parameters<tools::clipboard::ClipboardWriteArgs>,
     ) -> Result<CallToolResult, McpError> {
-        Ok(tool_result(tools::clipboard::clipboard_write(args).await))
+        let v = serde_json::to_value(&args).unwrap_or(serde_json::Value::Null);
+        let audit = self.audit.clone();
+        let mode = self.mode.as_str();
+        Ok(dispatch_audited(audit, mode, "clipboard_write", v, async move {
+            tools::clipboard::clipboard_write(self, args).await
+        })
+        .await)
     }
 
     // ---- Shell + filesystem ----
@@ -201,7 +289,13 @@ impl KdeMcp {
         &self,
         Parameters(args): Parameters<tools::bash::BashArgs>,
     ) -> Result<CallToolResult, McpError> {
-        Ok(tool_result(tools::bash::bash(args).await))
+        let v = serde_json::to_value(&args).unwrap_or(serde_json::Value::Null);
+        let audit = self.audit.clone();
+        let mode = self.mode.as_str();
+        Ok(dispatch_audited(audit, mode, "bash", v, async move {
+            tools::bash::bash(self, args).await
+        })
+        .await)
     }
 
     #[tool(
@@ -213,9 +307,13 @@ impl KdeMcp {
         &self,
         Parameters(args): Parameters<tools::text_editor::TextEditorViewArgs>,
     ) -> Result<CallToolResult, McpError> {
-        Ok(tool_result(
-            tools::text_editor::text_editor_view(args).await,
-        ))
+        let v = serde_json::to_value(&args).unwrap_or(serde_json::Value::Null);
+        let audit = self.audit.clone();
+        let mode = self.mode.as_str();
+        Ok(dispatch_audited(audit, mode, "text_editor.view", v, async move {
+            tools::text_editor::text_editor_view(self, args).await
+        })
+        .await)
     }
 
     #[tool(
@@ -227,9 +325,13 @@ impl KdeMcp {
         &self,
         Parameters(args): Parameters<tools::text_editor::TextEditorEditArgs>,
     ) -> Result<CallToolResult, McpError> {
-        Ok(tool_result(
-            tools::text_editor::text_editor_edit(args).await,
-        ))
+        let v = serde_json::to_value(&args).unwrap_or(serde_json::Value::Null);
+        let audit = self.audit.clone();
+        let mode = self.mode.as_str();
+        Ok(dispatch_audited(audit, mode, "text_editor.edit", v, async move {
+            tools::text_editor::text_editor_edit(self, args).await
+        })
+        .await)
     }
 }
 
@@ -246,59 +348,129 @@ impl ServerHandler for KdeMcp {
             ))
             .with_protocol_version(ProtocolVersion::V_2025_11_25)
             .with_instructions(
-                "kde-mcp: KDE Plasma 6 / Wayland desktop control. \
-             Phase 0 build — all tools return not_implemented."
-                    .to_string(),
+                "kde-mcp: KDE Plasma 6 / Wayland desktop control.".to_string(),
             )
     }
 }
 
-/// Convert a tool's Result into a CallToolResult.
+/// Wrap a tool future with audit-log dispatch.
 ///
-/// Successes serialise to text content carrying the structured payload.
-/// Semantic failures produce CallToolResult::error with the structured
-/// `{ code, details }` shape per spec §8 — the model sees a typed error
-/// code rather than free-text.
-fn tool_result<T: serde::Serialize>(r: Result<T, ToolError>) -> CallToolResult {
-    match r {
+/// - Serialises args to JSON, runs the redactor, writes the AuditRecord.
+/// - Times the call to ms.
+/// - On error, records `ok: false` and the structured error payload.
+/// - The return type is `CallToolResult` so the rmcp `#[tool]` macro can
+///   `?`-bubble it.
+pub(crate) async fn dispatch_audited<F, T>(
+    audit: Arc<AuditLog>,
+    mode: &'static str,
+    tool: &'static str,
+    args: serde_json::Value,
+    fut: F,
+) -> CallToolResult
+where
+    F: std::future::Future<Output = Result<T, ToolError>>,
+    T: serde::Serialize,
+{
+    let started = std::time::Instant::now();
+    let outcome = fut.await;
+    let duration_ms = started.elapsed().as_millis() as u64;
+    let redacted_args = crate::audit::redact(tool, args);
+    let (call_result, audit_error) = match outcome {
         Ok(payload) => {
             let v = serde_json::to_value(&payload).unwrap_or(serde_json::Value::Null);
-            CallToolResult::success(vec![Content::text(v.to_string())])
+            (
+                CallToolResult::success(vec![Content::text(v.to_string())]),
+                None,
+            )
         }
         Err(e) => {
             let code = e.code();
             let msg = e.to_string();
             let details = serde_json::to_value(&e).unwrap_or(serde_json::Value::Null);
             let payload = serde_json::json!({ "code": code, "details": details });
-            CallToolResult::error(vec![Content::text(msg), Content::text(payload.to_string())])
+            let r = CallToolResult::error(vec![
+                Content::text(msg),
+                Content::text(payload.to_string()),
+            ]);
+            (r, Some(payload))
         }
+    };
+    let rec = crate::audit::AuditRecord {
+        ts: String::new(),
+        mode,
+        tool: tool.to_string(),
+        args: redacted_args,
+        ok: audit_error.is_none(),
+        duration_ms: Some(duration_ms),
+        error: audit_error,
+        vision_fallback: None,
+    };
+    if let Err(e) = audit.write(rec).await {
+        tracing::error!(error = %e, tool, "audit write failed");
     }
+    call_result
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn tool_result_carries_error_code_in_payload() {
-        let r: Result<(), ToolError> = Err(ToolError::NotImplemented);
-        let result = tool_result(r);
-        assert_eq!(result.is_error, Some(true));
-        // The structured payload is in the second content block.
-        let payload_text = match &result.content[1].raw {
-            rmcp::model::RawContent::Text(t) => &t.text,
-            _ => panic!("expected text content"),
-        };
-        let v: serde_json::Value = serde_json::from_str(payload_text).unwrap();
-        assert_eq!(v["code"], "not_implemented");
+    async fn fresh_audit() -> (tempfile::TempDir, Arc<AuditLog>) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a.jsonl");
+        let audit = Arc::new(AuditLog::open(&path).await.unwrap());
+        (dir, audit)
     }
 
-    #[test]
-    fn tool_result_success_path_is_not_error() {
-        #[derive(serde::Serialize)]
-        struct Ok {}
-        let r: Result<Ok, ToolError> = Ok(Ok {});
-        let result = tool_result(r);
-        assert!(matches!(result.is_error, None | Some(false)));
+    #[tokio::test]
+    async fn dispatch_audited_writes_a_record_on_success() {
+        let (_dir, audit) = fresh_audit().await;
+        let path = _dir.path().join("a.jsonl");
+        let r = dispatch_audited(
+            audit.clone(),
+            "live",
+            "observe",
+            serde_json::json!({"detail": "summary"}),
+            async { Ok::<_, ToolError>(serde_json::json!({"mode":"live"})) },
+        )
+        .await;
+        assert!(matches!(r.is_error, None | Some(false)));
+        // Drop the AuditLog so the write is flushed and the file released.
+        drop(audit);
+        let body = tokio::fs::read_to_string(&path).await.unwrap();
+        let v: serde_json::Value = serde_json::from_str(body.trim()).unwrap();
+        assert_eq!(v["tool"], "observe");
+        assert_eq!(v["mode"], "live");
+        assert_eq!(v["ok"], true);
+        assert!(v["duration_ms"].is_number());
+    }
+
+    #[tokio::test]
+    async fn dispatch_audited_writes_a_record_on_error() {
+        let (_dir, audit) = fresh_audit().await;
+        let path = _dir.path().join("a.jsonl");
+        let r = dispatch_audited(
+            audit.clone(),
+            "live",
+            "clipboard_write",
+            serde_json::json!({"content": "secret"}),
+            async { Err::<serde_json::Value, _>(ToolError::NotImplemented) },
+        )
+        .await;
+        assert_eq!(r.is_error, Some(true));
+        drop(audit);
+        let body = tokio::fs::read_to_string(&path).await.unwrap();
+        let v: serde_json::Value = serde_json::from_str(body.trim()).unwrap();
+        assert_eq!(v["ok"], false);
+        assert_eq!(v["error"]["code"], "not_implemented");
+        // Redaction: clipboard_write.content should be hashed in the audit record.
+        assert!(
+            v["args"]["content"]["sha256"].is_string(),
+            "args.content should have been redacted: {v}",
+        );
+        assert!(
+            !v.to_string().contains("\"secret\""),
+            "secret leaked into audit"
+        );
     }
 }

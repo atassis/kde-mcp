@@ -1,13 +1,9 @@
 //! Lazily-opened AT-SPI accessibility-bus connection.
 //!
-//! Task 11 implements this; Phase-1 skeleton.
+//! Phase-1 surface: `AtspiConnection::default()` is cheap and never opens the
+//! bus; Task 11 will fill in a `get()` accessor that opens on first use.
 
-use crate::error::ToolError;
-
+#[derive(Default)]
 pub struct AtspiConnection {
-    // Populated by Task 11.
-}
-
-pub async fn connect() -> Result<AtspiConnection, ToolError> {
-    Err(ToolError::NotImplemented)
+    // Populated by Task 11 (one-cell holding atspi::AccessibilityConnection).
 }

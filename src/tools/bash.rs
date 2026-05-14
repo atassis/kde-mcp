@@ -1,8 +1,9 @@
 use crate::error::ToolError;
+use crate::server::KdeMcp;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Deserialize, JsonSchema)]
+#[derive(Debug, Deserialize, JsonSchema, Serialize)]
 pub struct BashArgs {
     pub command: String,
     #[serde(default)]
@@ -12,6 +13,6 @@ pub struct BashArgs {
 #[derive(Debug, Default, Serialize, JsonSchema)]
 pub struct BashResponse {}
 
-pub async fn bash(_args: BashArgs) -> Result<BashResponse, ToolError> {
+pub async fn bash(_state: &KdeMcp, _args: BashArgs) -> Result<BashResponse, ToolError> {
     Err(ToolError::NotImplemented)
 }

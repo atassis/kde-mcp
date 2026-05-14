@@ -1,8 +1,9 @@
 use crate::error::ToolError;
+use crate::server::KdeMcp;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Deserialize, JsonSchema)]
+#[derive(Debug, Deserialize, JsonSchema, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub struct WaitArgs {
     pub condition: String,
@@ -15,6 +16,6 @@ pub struct WaitArgs {
 #[derive(Debug, Default, Serialize, JsonSchema)]
 pub struct WaitResponse {}
 
-pub async fn wait(_args: WaitArgs) -> Result<WaitResponse, ToolError> {
+pub async fn wait(_state: &KdeMcp, _args: WaitArgs) -> Result<WaitResponse, ToolError> {
     Err(ToolError::NotImplemented)
 }

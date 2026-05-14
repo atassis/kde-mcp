@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use kde_mcp::{KdeMcp, audit, cli::parse_and_validate, lock::ModeLock, mode, notify};
 use rmcp::{ServiceExt, transport::stdio};
+use std::sync::Arc;
 use tracing_subscriber::EnvFilter;
 
 #[tokio::main(flavor = "multi_thread")]
@@ -31,17 +32,19 @@ async fn main() -> Result<()> {
 
     notify::notify_lock_acquired(mode_name).await;
 
-    let _state = mode::bootstrap(cli.mode)
+    let bootstrapped = mode::bootstrap(cli.mode)
         .await
         .with_context(|| format!("bootstrapping {mode_name} mode"))?;
 
     let audit_path = audit::default_path();
-    let _audit = audit::AuditLog::open(&audit_path)
-        .await
-        .with_context(|| format!("opening audit log at {}", audit_path.display()))?;
+    let audit_log = Arc::new(
+        audit::AuditLog::open(&audit_path)
+            .await
+            .with_context(|| format!("opening audit log at {}", audit_path.display()))?,
+    );
     tracing::info!(audit = %audit_path.display(), "audit log open");
 
-    let server = KdeMcp::new(cli.mode);
+    let server = KdeMcp::new(cli.mode, audit_log, bootstrapped.bus);
 
     eprintln!("kde-mcp: ready (mode={mode_name})");
 

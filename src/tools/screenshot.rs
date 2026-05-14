@@ -1,8 +1,9 @@
 use crate::error::ToolError;
+use crate::server::KdeMcp;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Default, Deserialize, JsonSchema)]
+#[derive(Debug, Default, Deserialize, JsonSchema, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub struct ScreenshotArgs {
     #[serde(default)]
@@ -16,6 +17,9 @@ pub struct ScreenshotArgs {
 #[derive(Debug, Default, Serialize, JsonSchema)]
 pub struct ScreenshotResponse {}
 
-pub async fn screenshot(_args: ScreenshotArgs) -> Result<ScreenshotResponse, ToolError> {
+pub async fn screenshot(
+    _state: &KdeMcp,
+    _args: ScreenshotArgs,
+) -> Result<ScreenshotResponse, ToolError> {
     Err(ToolError::NotImplemented)
 }

@@ -1,8 +1,9 @@
 use crate::error::ToolError;
+use crate::server::KdeMcp;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Default, Deserialize, JsonSchema)]
+#[derive(Debug, Default, Deserialize, JsonSchema, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub struct InspectArgs {
     #[serde(default)]
@@ -16,6 +17,6 @@ pub struct InspectArgs {
 #[derive(Debug, Default, Serialize, JsonSchema)]
 pub struct InspectResponse {}
 
-pub async fn inspect(_args: InspectArgs) -> Result<InspectResponse, ToolError> {
+pub async fn inspect(_state: &KdeMcp, _args: InspectArgs) -> Result<InspectResponse, ToolError> {
     Err(ToolError::NotImplemented)
 }

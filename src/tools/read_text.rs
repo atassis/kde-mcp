@@ -1,8 +1,9 @@
 use crate::error::ToolError;
+use crate::server::KdeMcp;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Deserialize, JsonSchema)]
+#[derive(Debug, Deserialize, JsonSchema, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub struct ReadTextArgs {
     pub region: String,
@@ -15,6 +16,9 @@ pub struct ReadTextArgs {
 #[derive(Debug, Default, Serialize, JsonSchema)]
 pub struct ReadTextResponse {}
 
-pub async fn read_text(_args: ReadTextArgs) -> Result<ReadTextResponse, ToolError> {
+pub async fn read_text(
+    _state: &KdeMcp,
+    _args: ReadTextArgs,
+) -> Result<ReadTextResponse, ToolError> {
     Err(ToolError::NotImplemented)
 }
