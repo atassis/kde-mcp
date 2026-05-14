@@ -1,4 +1,6 @@
-use kde_mcp::keymap::{KEY_ENTER, KEY_TAB, keycode_for_char, keycode_for_named_key, shift_required};
+use kde_mcp::keymap::{
+    KEY_ENTER, KEY_TAB, keycode_for_char, keycode_for_named_key, shift_required,
+};
 
 #[test]
 fn returns_evdev_codes_for_common_ascii_letters() {

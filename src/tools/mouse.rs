@@ -52,8 +52,9 @@ pub async fn mouse(state: &KdeMcp, args: MouseArgs) -> Result<MouseResponse, Too
     let modifiers = parse_modifiers(args.modifier.as_deref().unwrap_or(&[]))?;
     if !modifiers.is_empty() {
         return Err(ToolError::UnsupportedRegion {
-            reason: "mouse modifier keys require keyboard+pointer session combine; deferred to Phase 6"
-                .into(),
+            reason:
+                "mouse modifier keys require keyboard+pointer session combine; deferred to Phase 6"
+                    .into(),
         });
     }
 
@@ -67,14 +68,15 @@ pub async fn mouse(state: &KdeMcp, args: MouseArgs) -> Result<MouseResponse, Too
             libei_version: None,
             kwin_version: None,
         })?;
-    let button_iface: ei::Button = session
-        .device
-        .interface::<ei::Button>()
-        .ok_or_else(|| ToolError::InputDispatchFailed {
-            detail: "device missing Button interface".into(),
-            libei_version: None,
-            kwin_version: None,
-        })?;
+    let button_iface: ei::Button =
+        session
+            .device
+            .interface::<ei::Button>()
+            .ok_or_else(|| ToolError::InputDispatchFailed {
+                detail: "device missing Button interface".into(),
+                libei_version: None,
+                kwin_version: None,
+            })?;
     let scroll_iface = session.device.interface::<ei::Scroll>();
 
     device.start_emulating(session.last_serial, 0);

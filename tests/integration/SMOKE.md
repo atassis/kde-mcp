@@ -359,3 +359,107 @@ for r in records:
 ```
 
 Expected: one record per `tools/call`, including the wire tool name (`text_editor.view` not `text_editor_view`).
+
+---
+
+## Part D — Phase 2 mutating tools
+
+Each `--mode=live` call fires a KDE notification. Spec §14 row 2 demo target is "open kcalc, type 2+3, press =, read the result"; the fixtures below exercise pieces.
+
+### D.1 — `keyboard.key Ctrl+Tab` in a focused browser
+
+Focus a browser tab with multiple tabs open, then:
+
+```sh
+{ printf '%s\n' \
+    '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"smoke","version":"0"}}}' \
+    '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
+    '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"keyboard.key","arguments":{"keys":"ctrl+Tab"}}}'; \
+  sleep 1.5; } | timeout 8 ./target/release/kde-mcp --mode=live 2>/dev/null > /tmp/d1.jsonl
+sed -n '2p' /tmp/d1.jsonl | python3 -c '
+import sys, json
+d = json.load(sys.stdin)["result"]
+assert d.get("isError") is not True, d
+payload = json.loads(d["content"][0]["text"])
+assert payload["ok"]
+print("D.1 OK")'
+```
+
+Expected: the browser switches tabs.
+
+### D.2 — `clipboard_write` + verify via `clipboard_read`
+
+```sh
+{ printf '%s\n' \
+    '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"smoke","version":"0"}}}' \
+    '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
+    '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"clipboard_write","arguments":{"content":"phase-2-write-test"}}}' \
+    '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"clipboard_read","arguments":{}}}'; \
+  sleep 0.8; } | timeout 6 ./target/release/kde-mcp --mode=live 2>/dev/null > /tmp/d2.jsonl
+test "$(wc -l < /tmp/d2.jsonl)" = 3
+sed -n '3p' /tmp/d2.jsonl | python3 -c '
+import sys, json
+d = json.load(sys.stdin)["result"]
+payload = json.loads(d["content"][0]["text"])
+assert payload["content"]["text"] == "phase-2-write-test", payload
+print("D.2 OK")'
+```
+
+### D.3 — `mouse click` on a Brave tab
+
+Focus Brave first. Then:
+
+```sh
+{ printf '%s\n' \
+    '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"smoke","version":"0"}}}' \
+    '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
+    '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"mouse","arguments":{"action":"click","coordinate":[400,20]}}}'; \
+  sleep 1.5; } | timeout 8 ./target/release/kde-mcp --mode=live 2>/dev/null > /tmp/d3.jsonl
+sed -n '2p' /tmp/d3.jsonl | python3 -c '
+import sys, json
+d = json.load(sys.stdin)["result"]
+assert d.get("isError") is not True, d
+payload = json.loads(d["content"][0]["text"])
+assert payload["ok"]
+print("D.3 OK")'
+```
+
+### D.4 — `keyboard.type` short ASCII string
+
+Focus a text field (URL bar, terminal, kate), then:
+
+```sh
+{ printf '%s\n' \
+    '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"smoke","version":"0"}}}' \
+    '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
+    '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"keyboard.type","arguments":{"text":"hello"}}}'; \
+  sleep 1.5; } | timeout 8 ./target/release/kde-mcp --mode=live 2>/dev/null > /tmp/d4.jsonl
+sed -n '2p' /tmp/d4.jsonl | python3 -c '
+import sys, json
+d = json.load(sys.stdin)["result"]
+payload = json.loads(d["content"][0]["text"])
+assert payload["used_clipboard"] == False, payload
+print("D.4 OK")'
+```
+
+### D.5 — `keyboard.type` triggers clipboard-paste for non-ASCII
+
+Focus a text field, then:
+
+```sh
+{ printf '%s\n' \
+    '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"smoke","version":"0"}}}' \
+    '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
+    '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"keyboard.type","arguments":{"text":"Привет"}}}'; \
+  sleep 2.0; } | timeout 8 ./target/release/kde-mcp --mode=live 2>/dev/null > /tmp/d5.jsonl
+sed -n '2p' /tmp/d5.jsonl | python3 -c '
+import sys, json
+d = json.load(sys.stdin)["result"]
+payload = json.loads(d["content"][0]["text"])
+assert payload["used_clipboard"] is True, payload
+print("D.5 OK")'
+```
+
+### D.6 — `act_on_element` (deferred to Phase 4)
+
+Requires a previous `inspect` to mint an element ref. Current Phase 1 `inspect target=focused` and `inspect target=window:<ref>` return `not_implemented`. End-to-end verification of `act_on_element` therefore waits for Phase 4's focus tracker; the code path here is exercised by compile-only verification + spec parity tests.

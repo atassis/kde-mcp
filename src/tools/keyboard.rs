@@ -54,14 +54,13 @@ pub async fn keyboard_type(
 
     let session = EisSession::open(&state.bus, CAP_KEYBOARD, true, false).await?;
     let device = session.device.device().clone();
-    let kb: ei::Keyboard = session
-        .device
-        .interface::<ei::Keyboard>()
-        .ok_or_else(|| ToolError::InputDispatchFailed {
+    let kb: ei::Keyboard = session.device.interface::<ei::Keyboard>().ok_or_else(|| {
+        ToolError::InputDispatchFailed {
             detail: "device missing Keyboard interface".into(),
             libei_version: None,
             kwin_version: None,
-        })?;
+        }
+    })?;
 
     device.start_emulating(session.last_serial, 0);
     session.flush()?;
@@ -110,14 +109,13 @@ pub async fn keyboard_key(
 
     let session = EisSession::open(&state.bus, CAP_KEYBOARD, true, false).await?;
     let device = session.device.device().clone();
-    let kb: ei::Keyboard = session
-        .device
-        .interface::<ei::Keyboard>()
-        .ok_or_else(|| ToolError::InputDispatchFailed {
+    let kb: ei::Keyboard = session.device.interface::<ei::Keyboard>().ok_or_else(|| {
+        ToolError::InputDispatchFailed {
             detail: "device missing Keyboard interface".into(),
             libei_version: None,
             kwin_version: None,
-        })?;
+        }
+    })?;
 
     device.start_emulating(session.last_serial, 0);
     session.flush()?;
@@ -188,14 +186,13 @@ async fn type_via_clipboard(state: &KdeMcp, text: &str) -> Result<KeyboardRespon
     // Send Ctrl+V.
     let session = EisSession::open(&state.bus, CAP_KEYBOARD, true, false).await?;
     let device = session.device.device().clone();
-    let kb: ei::Keyboard = session
-        .device
-        .interface::<ei::Keyboard>()
-        .ok_or_else(|| ToolError::InputDispatchFailed {
+    let kb: ei::Keyboard = session.device.interface::<ei::Keyboard>().ok_or_else(|| {
+        ToolError::InputDispatchFailed {
             detail: "device missing Keyboard interface".into(),
             libei_version: None,
             kwin_version: None,
-        })?;
+        }
+    })?;
     let paste_key = keycode_for_char('v').unwrap();
     device.start_emulating(session.last_serial, 0);
     session.flush()?;

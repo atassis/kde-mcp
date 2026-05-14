@@ -77,12 +77,15 @@ pub async fn act_on_element(
         .map_err(|e| ToolError::BusDisconnected {
             detail: e.to_string(),
         })?;
-    let action_proxy = proxies.action().await.map_err(|_| ToolError::NotActionable {
-        available_actions: vec![],
-        fallback_suggestion: Some(
-            "element has no Action interface; try mouse.click on bbox".into(),
-        ),
-    })?;
+    let action_proxy = proxies
+        .action()
+        .await
+        .map_err(|_| ToolError::NotActionable {
+            available_actions: vec![],
+            fallback_suggestion: Some(
+                "element has no Action interface; try mouse.click on bbox".into(),
+            ),
+        })?;
     let actions = action_proxy
         .get_actions()
         .await

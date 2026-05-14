@@ -14,12 +14,13 @@ git tag -l                # phase-0 should be present (phase-1 not yet tagged)
 cargo test --workspace    # 57 tests; should all pass in <5 s after build
 ```
 
-**Phase 1 complete and tagged.** All 14 plan tasks merged and live-smoked against the dev machine's KDE Plasma 6 session. 5 read-only tools (text_editor.view, clipboard_read, window_query, screenshot, observe) verified end-to-end; 3 first-cut deferrals (`inspect target=focused`, `inspect target=window:<ref>`, `observe.focused_element`) lift in Phase 4.
+**Phase 2 code-complete; live smoke pending user.** All 5 mutating tools (`mouse`, `keyboard.type`, `keyboard.key`, `clipboard_write`, `act_on_element`) implemented against libei + AT-SPI. Send isolation pattern locked in at `src/kwin/eis.rs` (reis's event stream is !Send; we run the handshake inside `spawn_blocking` + a current-thread runtime and only pass Send pieces back). 18 new unit tests for keymap + chord parser. 82 tests total pass; clippy clean.
 
 **Immediate next action when atassis returns:**
 
-1. **Decide on the generalization refactor.** `docs/research/2026-05-14-generalization-paths.md` argues for extracting a `CompositorBackend` trait *before* Phase 2 (input emulation), because the cost grows fast as more tools are added. The refactor is ~400 LOC, all mechanical, no behavioural drift. Adding an X11 backend later becomes a single ~1000 LOC PR. If you take the refactor: write ADR-0009 superseding ADR-0002 first, then refactor, then start Phase 2 on top of the new trait.
-2. **OR skip and start Phase 2 directly** (input emulation via libei). Spec §14 row 2 has the scope. The EIS keystroke prober at `examples/eis-keystroke-prober/` already de-risks the load-bearing primitive.
+1. **Run live smoke §D** in `tests/integration/SMOKE.md` (5 fixtures D.1–D.5 covering keyboard.key, clipboard_write+read round-trip, mouse click, keyboard.type ASCII and non-ASCII clipboard-paste). D.6 (act_on_element end-to-end) is gated on a future Phase 4 focus tracker.
+2. If green: `git tag phase-2`. (Held back so user can debug failures first.)
+3. Decide path for Phase 3: policy gate (§6.0 — lock check, cancel check, tier check, per-app approval, sentinel warnings). OR pause for the generalization refactor (`docs/research/2026-05-14-generalization-paths.md`) before the policy gate cuts across more tools.
 
 **Background context worth revisiting:**
 
@@ -30,12 +31,12 @@ cargo test --workspace    # 57 tests; should all pass in <5 s after build
 
 ## Current status (2026-05-14, end of day)
 
-- **Phase:** **Phase 1 complete + tagged.** Live smoke C.1–C.5 + audit green.
-- **Last commit:** `9857115 docs(research): generalization paths analysis`.
-- **Tags:** `phase-0`, `phase-1` (both local; no remote configured).
+- **Phase:** **Phase 2 code-complete; live smoke + tag pending.**
+- **Last commit:** `33d7b13 feat(phase-2): act_on_element via AT-SPI Action.do_action`.
+- **Tags:** `phase-0`, `phase-1` (local; no remote). `phase-2` waits on live smoke.
 - **Branch:** `main`.
 - **Working tree:** clean.
-- **Tests:** 64 passing (40 unit + 24 integration). `cargo fmt` clean, `cargo clippy --workspace --all-targets -- -D warnings` clean.
+- **Tests:** 82 passing (40 unit + 42 integration). `cargo fmt` clean, `cargo clippy --workspace --all-targets -- -D warnings` clean.
 - **`.desktop` install:** the dev `kde-mcp.desktop` at `~/.local/share/applications/` points to `target/release/kde-mcp` so KApplicationTrader authorises ScreenShot2. If you move the binary, re-run the templated install (or `cargo install --path . --root ~/.local` then update the `Exec=` line).
 
 ### Phase 1 progress
