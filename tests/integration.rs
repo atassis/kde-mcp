@@ -5,6 +5,7 @@
 
 mod integration {
     pub mod cli_parse;
+    pub mod clipboard_offline;
     pub mod lockfile;
     pub mod text_editor;
     pub mod tools_list;

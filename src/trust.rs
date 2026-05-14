@@ -1,10 +1,11 @@
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// Three-level trust discriminator (spec §4.7).
 ///
 /// Quarantines externally-sourced strings the model reads so prompt-injection
 /// attempts surface as data, not instructions.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Trust {
     /// OS-API output (window class, AT-SPI role enum, geometry, mode).
@@ -16,13 +17,13 @@ pub enum Trust {
     External,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct Tagged<T> {
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+pub struct Tagged<T: JsonSchema> {
     pub trust: Trust,
     pub text: T,
 }
 
-impl<T> Tagged<T> {
+impl<T: JsonSchema> Tagged<T> {
     pub fn trusted(text: T) -> Self {
         Self {
             trust: Trust::Trusted,
