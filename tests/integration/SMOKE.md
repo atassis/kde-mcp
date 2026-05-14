@@ -207,10 +207,155 @@ Expected: the "Claude finished using your computer" notification fires when the 
 
 ## Known not-yet-implemented
 
-These are Phase 1+ work and **not** failures during Phase 0 smoke:
+These are Phase 2+ work and **not** failures during Phase 1 smoke:
 
-- Audit log is empty after a tool call (tool-dispatch audit hookup lands in Phase 1's first task).
 - `--mode=virtual` exits with `not_implemented` from `mode::r#virtual::bootstrap` (Phase 5 implements it).
-- Every `tools/call` returns `not_implemented`. The infrastructure is what Phase 0 ships; the tool bodies fill in Phases 1–4.
+- Mutating tools (`mouse`, `keyboard.{type,key}`, `act_on_element`, `window_control`, `clipboard_write`, `text_editor.edit`, `bash`) and `read_text` / `wait` return `not_implemented`. Tool bodies land in Phases 2–4.
+- `inspect target="focused"` returns `not_implemented` — focus tracking via AT-SPI `FocusEvents` lands in Phase 4 polish.
+- `inspect target="window:<ref>"` returns `not_implemented` — window→AT-SPI app mapping is Phase 4.
+- `observe.focused_element` is always `null` with a warning — same reason as above.
 
-If any of the above produces *unexpected* behaviour (e.g. `--mode=virtual` panics instead of cleanly returning `not_implemented`), that **is** a Phase 0 regression.
+If any of the above produces *unexpected* behaviour (panics, malformed errors, missing audit records), that **is** a Phase 1 regression.
+
+---
+
+## Part C — Phase 1 read-only tools
+
+These require a live KDE Plasma 6 / Wayland session. Each `--mode=live` invocation fires the "Claude is using your computer" KDE notification.
+
+### C.1 — `text_editor.view`
+
+```sh
+{ printf '%s\n' \
+    '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"smoke","version":"0"}}}' \
+    '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
+    '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"text_editor.view","arguments":{"path":"/etc/os-release","view_range":[1,3]}}}'; \
+  sleep 0.5; } | timeout 5 ./target/release/kde-mcp --mode=live 2>/dev/null > /tmp/c1.jsonl
+test "$(wc -l < /tmp/c1.jsonl)" = 2 && echo "C.1 line count OK"
+sed -n '2p' /tmp/c1.jsonl | python3 -c '
+import sys, json
+d = json.load(sys.stdin)["result"]
+assert d.get("isError") is not True, d
+payload = json.loads(d["content"][0]["text"])
+assert payload["kind"] == "file", payload
+assert "1\t" in payload["content"], payload["content"][:200]
+print("C.1 OK")'
+```
+
+### C.2 — `clipboard_read`
+
+Requires `wl-clipboard` installed. Copy "kde-mcp test" into the clipboard via any normal means first.
+
+```sh
+{ printf '%s\n' \
+    '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"smoke","version":"0"}}}' \
+    '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
+    '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"clipboard_read","arguments":{"mime_type":"text/plain"}}}'; \
+  sleep 0.5; } | timeout 5 ./target/release/kde-mcp --mode=live 2>/dev/null > /tmp/c2.jsonl
+sed -n '2p' /tmp/c2.jsonl | python3 -c '
+import sys, json
+d = json.load(sys.stdin)["result"]
+assert d.get("isError") is not True, d
+payload = json.loads(d["content"][0]["text"])
+assert payload["content"]["trust"] == "external", payload
+assert payload["origin"] == "external", payload
+print("C.2 OK; clipboard content was:", repr(payload["content"]["text"][:80]))'
+```
+
+### C.3 — `window_query`
+
+```sh
+{ printf '%s\n' \
+    '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"smoke","version":"0"}}}' \
+    '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
+    '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"window_query","arguments":{"action":"list","format":"titles"}}}'; \
+  sleep 1.0; } | timeout 6 ./target/release/kde-mcp --mode=live 2>/dev/null > /tmp/c3.jsonl
+sed -n '2p' /tmp/c3.jsonl | python3 -c '
+import sys, json
+d = json.load(sys.stdin)["result"]
+assert d.get("isError") is not True, d
+payload = json.loads(d["content"][0]["text"])
+assert "windows" in payload, payload
+print(f"C.3 OK; {len(payload[\"windows\"])} windows visible")
+for w in payload["windows"][:5]:
+    print(" -", w["uuid"], w["class"]["text"], "|", w["title"]["text"][:40])'
+```
+
+### C.4 — `screenshot region=active_screen`
+
+```sh
+{ printf '%s\n' \
+    '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"smoke","version":"0"}}}' \
+    '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
+    '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"screenshot","arguments":{"region":"active_screen","max_long_edge":640}}}'; \
+  sleep 1.0; } | timeout 8 ./target/release/kde-mcp --mode=live 2>/dev/null > /tmp/c4.jsonl
+sed -n '2p' /tmp/c4.jsonl | python3 -c '
+import sys, json, base64
+d = json.load(sys.stdin)["result"]
+assert d.get("isError") is not True, d
+payload = json.loads(d["content"][0]["text"])
+assert payload["format"] == "png"
+b = base64.b64decode(payload["png_base64"])
+assert b[:8] == b"\x89PNG\r\n\x1a\n", "not a PNG"
+print(f"C.4 OK; {payload[\"returned_size\"]} from {payload[\"original_size\"]} ({len(b)} bytes)")'
+```
+
+### C.5 — `observe detail=interactive`
+
+```sh
+{ printf '%s\n' \
+    '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"smoke","version":"0"}}}' \
+    '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
+    '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"observe","arguments":{"detail":"interactive"}}}'; \
+  sleep 1.0; } | timeout 6 ./target/release/kde-mcp --mode=live 2>/dev/null > /tmp/c5.jsonl
+sed -n '2p' /tmp/c5.jsonl | python3 -c '
+import sys, json
+d = json.load(sys.stdin)["result"]
+assert d.get("isError") is not True, d
+payload = json.loads(d["content"][0]["text"])
+assert payload["mode"] == "live"
+assert isinstance(payload["cursor"], list)
+print(f"C.5 OK; cursor={payload[\"cursor\"]}, focused={payload.get(\"focused_window\", {}).get(\"class\", {}).get(\"text\") if payload.get(\"focused_window\") else None}, {len(payload.get(\"windows\", []))} other windows")
+for w in payload["warnings"]:
+    print("  warn:", w)'
+```
+
+### C.6 — `inspect target="element:<ref>"`
+
+Two-step: get a window's UUID from `observe`, then call `inspect`:
+
+```sh
+# Step 1: observe → grab a window UUID. Use kate or konsole or kcalc as test target.
+UUID=$({ printf '%s\n' \
+    '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"smoke","version":"0"}}}' \
+    '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
+    '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"observe","arguments":{"detail":"interactive"}}}'; \
+  sleep 1; } | timeout 6 ./target/release/kde-mcp --mode=live 2>/dev/null | sed -n '2p' | python3 -c '
+import sys, json
+d = json.load(sys.stdin)["result"]
+payload = json.loads(d["content"][0]["text"])
+fw = payload.get("focused_window")
+print(fw["uuid"] if fw else "", end="")')
+echo "got window uuid: $UUID"
+# Note: window:<ref> in inspect is Phase 4 — this is a placeholder; the
+# element: form requires a previous inspect to mint the ref. End-to-end
+# verification of element: is a Phase 4 SMOKE addendum.
+```
+
+`inspect target="focused"` and `inspect target="window:<ref>"` currently return `not_implemented` per the Phase 1 first-cut scope (recorded in HANDOFF.md and the plan's Task 12 step).
+
+### C.7 — Audit log per call
+
+```sh
+truncate -s 0 ~/.local/state/kde-mcp/audit.jsonl
+# Run any of C.1–C.5 above, then:
+test -s ~/.local/state/kde-mcp/audit.jsonl && echo "audit non-empty"
+python3 -c '
+import json
+records = [json.loads(line) for line in open(__import__("os").path.expanduser("~/.local/state/kde-mcp/audit.jsonl"))]
+print(f"audit: {len(records)} record(s)")
+for r in records:
+    print(" -", r["tool"], "ok" if r["ok"] else f"err={r[\"error\"][\"code\"]}", f"{r[\"duration_ms\"]}ms")'
+```
+
+Expected: one record per `tools/call`, including the wire tool name (`text_editor.view` not `text_editor_view`).

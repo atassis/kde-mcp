@@ -150,12 +150,15 @@ pub async fn observe(state: &KdeMcp, args: ObserveArgs) -> Result<ObserveRespons
 
     match detail {
         DetailLevel::Summary => {
-            if !include_others
+            // Per spec §6.1: in summary mode, return just a count of other
+            // windows when include_other_windows is true (the default).
+            // When it's false, drop the windows info entirely (no warning).
+            if include_others
                 && let Some(arr) = v.get("windows").and_then(|w| w.as_array())
                 && !arr.is_empty()
             {
                 warnings.push(format!(
-                    "{} other windows present (use detail=interactive)",
+                    "{} other windows present (use detail=interactive for details)",
                     arr.len()
                 ));
             }
@@ -198,10 +201,7 @@ pub async fn observe(state: &KdeMcp, args: ObserveArgs) -> Result<ObserveRespons
                             .and_then(|x| x.as_f64())
                             .map(|x| x as f32)
                             .unwrap_or(1.0),
-                        primary: s
-                            .get("primary")
-                            .and_then(|x| x.as_bool())
-                            .unwrap_or(false),
+                        primary: s.get("primary").and_then(|x| x.as_bool()).unwrap_or(false),
                     });
                 }
                 screens = Some(out);

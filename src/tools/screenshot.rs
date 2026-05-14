@@ -111,10 +111,7 @@ async fn resolve_region(
 /// On failure (KWin script timeout, JSON parse error), we return an empty
 /// rect list and a warning. Screenshot still succeeds, just unmasked — the
 /// model can be informed via the response's `warnings` field.
-async fn list_terminal_rects(
-    state: &KdeMcp,
-    captured: &Region,
-) -> (Vec<[i32; 4]>, Vec<String>) {
+async fn list_terminal_rects(state: &KdeMcp, captured: &Region) -> (Vec<[i32; 4]>, Vec<String>) {
     let exempt_uuid = match captured {
         Region::Window(uuid) => Some(uuid.clone()),
         _ => None,
@@ -191,9 +188,11 @@ fn process_image(
     max_long_edge: Option<u32>,
     rects: &[[i32; 4]],
 ) -> Result<ProcessedImage, ToolError> {
-    let img = image::load_from_memory_with_format(png_bytes, image::ImageFormat::Png)
-        .map_err(|e| ToolError::ExternalCommandFailed {
-            stderr: format!("png decode: {e}"),
+    let img =
+        image::load_from_memory_with_format(png_bytes, image::ImageFormat::Png).map_err(|e| {
+            ToolError::ExternalCommandFailed {
+                stderr: format!("png decode: {e}"),
+            }
         })?;
     let (ow, oh) = image::GenericImageView::dimensions(&img);
     // Mask at full resolution (cheap relative to resize); then resize.
