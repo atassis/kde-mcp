@@ -1,5 +1,5 @@
 use crate::error::ToolError;
-use crate::kwin::screenshot::{CaptureRequest, Region, capture};
+use crate::kwin::screenshot::{Capture, CaptureRequest, Region, capture};
 use crate::refs::{RefError, RefKind};
 use crate::server::KdeMcp;
 use crate::util::image::{is_terminal_class, mask_rectangles, resize_long_edge};
@@ -48,7 +48,7 @@ pub async fn screenshot(
     let region = resolve_region(state, args.region.as_ref()).await?;
     let include_cursor = args.include_cursor.unwrap_or(true);
 
-    let png_bytes = capture(
+    let captured = capture(
         &state.bus,
         CaptureRequest {
             region: region.clone(),
@@ -58,7 +58,7 @@ pub async fn screenshot(
     .await?;
 
     let (terminals, mask_warnings) = list_terminal_rects(state, &region).await;
-    let processed = process_image(&png_bytes, args.max_long_edge, &terminals)?;
+    let processed = process_image(captured, args.max_long_edge, &terminals)?;
 
     Ok(ScreenshotResponse {
         original_size: [processed.original.0, processed.original.1],
@@ -184,28 +184,28 @@ struct ProcessedImage {
 }
 
 fn process_image(
-    png_bytes: &[u8],
+    captured: Capture,
     max_long_edge: Option<u32>,
     rects: &[[i32; 4]],
 ) -> Result<ProcessedImage, ToolError> {
-    let img =
-        image::load_from_memory_with_format(png_bytes, image::ImageFormat::Png).map_err(|e| {
-            ToolError::ExternalCommandFailed {
-                stderr: format!("png decode: {e}"),
-            }
-        })?;
+    let img = captured.image;
     let (ow, oh) = image::GenericImageView::dimensions(&img);
-    // Mask at full resolution (cheap relative to resize); then resize.
+    // Mask at full resolution, then resize. Cheaper for multi-monitor full
+    // captures than masking-after-resize since the rect count is small.
     let masked_full = mask_rectangles(img, rects);
-    let (resized, scale) = resize_long_edge(masked_full, max_long_edge.unwrap_or(1280));
+    let (resized, post_resize_scale) = resize_long_edge(masked_full, max_long_edge.unwrap_or(1280));
     let rw = image::GenericImageView::dimensions(&resized).0;
     let rh = image::GenericImageView::dimensions(&resized).1;
-    let mut buf = Vec::with_capacity(64 * 1024);
+    let mut buf = Vec::with_capacity(256 * 1024);
     resized
         .write_to(&mut std::io::Cursor::new(&mut buf), image::ImageFormat::Png)
         .map_err(|e| ToolError::ExternalCommandFailed {
             stderr: format!("png encode: {e}"),
         })?;
+    // scale_factor combines KWin's device-pixel ratio (captured.scale) with
+    // any further downscale applied here. The agent multiplies API coords by
+    // 1/scale_factor to get screen-pixel coords for input emulation.
+    let scale = post_resize_scale / captured.scale;
     Ok(ProcessedImage {
         original: (ow, oh),
         returned: (rw, rh),
