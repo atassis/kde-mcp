@@ -49,6 +49,9 @@ regex-lite     = "0.1"
 nix            = { version = "0.29", default-features = false, features = ["fs"] }
 tempfile       = "3.10"
 
+# Phase 2 additions:
+reis           = { version = "=0.6.1", features = ["tokio"] }
+
 [dev-dependencies]
 tempfile       = "3.10"
 

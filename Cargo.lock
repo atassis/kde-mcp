@@ -911,6 +911,7 @@ dependencies = [
  "nix",
  "notify-rust",
  "regex-lite",
+ "reis",
  "rmcp",
  "schemars",
  "serde",
@@ -1306,6 +1307,19 @@ name = "regex-syntax"
 version = "0.8.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dc897dd8d9e8bd1ed8cdad82b5966c3e0ecae09fb1907d58efaa013543185d0a"
+
+[[package]]
+name = "reis"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2aee09758db35e73eb1398c6ef321973ce7f4aad86573ba08c1c8ef98d350b46"
+dependencies = [
+ "enumflags2",
+ "futures",
+ "log",
+ "rustix",
+ "tokio",
+]
 
 [[package]]
 name = "rmcp"
