@@ -4,5 +4,6 @@
 // times down vs. one binary per file.
 
 mod integration {
+    pub mod cli_parse;
     pub mod lockfile;
 }
