@@ -2,11 +2,17 @@
 //!
 //! Wraps the libei handshake the two probers pioneered (see
 //! `examples/eis-keystroke-prober/` and `examples/eis-mouse-prober/`).
-//! Lifecycle: [`EisSession::open`] runs the full handshake and returns a
-//! session ready to emit. The caller pulls the libei device + the
-//! capability-specific interface(s) and brackets emission with
-//! `start_emulating` / `stop_emulating`. Dropping the session closes the
-//! underlying socket; KWin sees the disconnect.
+//!
+//! ## Send isolation
+//!
+//! reis's `EiConvertEventStream` holds a `dyn FnOnce(u64)` callback that's
+//! not `Send`, so the handshake-and-await-resume loop can't run on the
+//! multi-threaded tokio runtime that backs `rmcp`'s tool dispatch. We
+//! isolate the !Send work inside [`tokio::task::spawn_blocking`] + a fresh
+//! current-thread runtime; only the Send members of the session
+//! (`ei::Context`, `reis::event::Device`, `u32`) cross the boundary back.
+//! After `open` returns, the rest of the tool body uses sync methods on
+//! the device / context — no further awaits on !Send state.
 
 use crate::error::ToolError;
 use futures_util::StreamExt;
@@ -23,7 +29,7 @@ use zbus::Connection;
 /// `docs/research/2026-05-14-phase-0-spikes.md` for the correction.
 pub const CAP_KEYBOARD: i32 = 1;
 pub const CAP_POINTER: i32 = 2;
-#[allow(dead_code)] // Touch tools are not in Phase 2 scope; constant for future use.
+#[allow(dead_code)] // Touch tools are not in Phase 2 scope.
 pub const CAP_TOUCH: i32 = 4;
 
 #[zbus::proxy(
@@ -53,6 +59,7 @@ impl EisSession {
         expect_keyboard: bool,
         expect_pointer: bool,
     ) -> Result<Self, ToolError> {
+        // D-Bus call on the calling runtime (it's Send).
         let proxy = RemoteDesktopProxy::new(bus)
             .await
             .map_err(|e| ToolError::BusDisconnected {
@@ -67,88 +74,32 @@ impl EisSession {
                 })?;
         let std_fd: std::os::fd::OwnedFd = owned_fd.into();
         let raw_fd = std_fd.into_raw_fd();
-        let stream = unsafe { UnixStream::from_raw_fd(raw_fd) };
-        stream.set_nonblocking(true).map_err(|e| ToolError::Io {
-            path: "eis stream".into(),
-            error: e.to_string(),
-        })?;
-        let context = ei::Context::new(stream).map_err(|e| ToolError::Io {
-            path: "ei::Context".into(),
-            error: e.to_string(),
-        })?;
 
-        let (_conn, mut events) = context
-            .handshake_tokio("kde-mcp", ei::handshake::ContextType::Sender)
-            .await
-            .map_err(|e| ToolError::InputDispatchFailed {
-                detail: format!("handshake: {e}"),
-                libei_version: None,
-                kwin_version: None,
-            })?;
-
-        let mut chosen_dev: Option<reis::event::Device> = None;
-        let mut last_serial: u32 = 0;
-        let deadline = Instant::now() + Duration::from_secs(3);
-        loop {
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() {
-                break;
-            }
-            let next = tokio::time::timeout(remaining, events.next()).await;
-            let Ok(Some(result)) = next else {
-                break;
-            };
-            let event = result.map_err(|e| ToolError::InputDispatchFailed {
-                detail: format!("event stream: {e}"),
-                libei_version: None,
-                kwin_version: None,
-            })?;
-            match &event {
-                reis::event::EiEvent::SeatAdded(evt) => {
-                    let mut bind: enumflags2::BitFlags<DeviceCapability> =
-                        DeviceCapability::Scroll.into();
-                    if expect_keyboard {
-                        bind |= DeviceCapability::Keyboard;
-                    }
-                    if expect_pointer {
-                        bind |= DeviceCapability::Pointer
-                            | DeviceCapability::PointerAbsolute
-                            | DeviceCapability::Button;
-                    }
-                    evt.seat.bind_capabilities(bind);
-                    context
-                        .flush()
-                        .map_err(|e| ToolError::InputDispatchFailed {
-                            detail: format!("flush after bind: {e}"),
-                            libei_version: None,
-                            kwin_version: None,
-                        })?;
-                }
-                reis::event::EiEvent::DeviceAdded(evt) => {
-                    let has_kb = evt.device.has_capability(DeviceCapability::Keyboard);
-                    let has_ptr = evt.device.has_capability(DeviceCapability::PointerAbsolute)
-                        && evt.device.has_capability(DeviceCapability::Button);
-                    let match_kb = expect_keyboard && has_kb;
-                    let match_ptr = expect_pointer && has_ptr;
-                    if match_kb || match_ptr {
-                        chosen_dev = Some(evt.device.clone());
-                    }
-                }
-                reis::event::EiEvent::DeviceResumed(evt) => {
-                    last_serial = evt.serial;
-                    if chosen_dev.is_some() {
-                        break;
-                    }
-                }
-                _ => {}
-            }
-        }
-
-        let device = chosen_dev.ok_or_else(|| ToolError::InputDispatchFailed {
-            detail: "no matching device materialised within 3s".into(),
+        // The libei handshake holds !Send state. Drive it on a dedicated
+        // current-thread runtime via spawn_blocking. The session pieces we
+        // pass back are Send.
+        let join = tokio::task::spawn_blocking(move || {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|e| ToolError::Io {
+                    path: "tokio current_thread rt".into(),
+                    error: e.to_string(),
+                })?;
+            rt.block_on(handshake_and_wait_for_device(
+                raw_fd,
+                expect_keyboard,
+                expect_pointer,
+            ))
+        })
+        .await
+        .map_err(|e| ToolError::InputDispatchFailed {
+            detail: format!("spawn_blocking join: {e}"),
             libei_version: None,
             kwin_version: None,
         })?;
+
+        let (context, device, last_serial) = join?;
         Ok(EisSession {
             context,
             device,
@@ -173,4 +124,94 @@ impl EisSession {
                 kwin_version: None,
             })
     }
+}
+
+async fn handshake_and_wait_for_device(
+    raw_fd: std::os::fd::RawFd,
+    expect_keyboard: bool,
+    expect_pointer: bool,
+) -> Result<(ei::Context, reis::event::Device, u32), ToolError> {
+    let stream = unsafe { UnixStream::from_raw_fd(raw_fd) };
+    stream.set_nonblocking(true).map_err(|e| ToolError::Io {
+        path: "eis stream".into(),
+        error: e.to_string(),
+    })?;
+    let context = ei::Context::new(stream).map_err(|e| ToolError::Io {
+        path: "ei::Context".into(),
+        error: e.to_string(),
+    })?;
+
+    let (_conn, mut events) = context
+        .handshake_tokio("kde-mcp", ei::handshake::ContextType::Sender)
+        .await
+        .map_err(|e| ToolError::InputDispatchFailed {
+            detail: format!("handshake: {e}"),
+            libei_version: None,
+            kwin_version: None,
+        })?;
+
+    let mut chosen_dev: Option<reis::event::Device> = None;
+    let mut last_serial: u32 = 0;
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            break;
+        }
+        let next = tokio::time::timeout(remaining, events.next()).await;
+        let Ok(Some(result)) = next else {
+            break;
+        };
+        let event = result.map_err(|e| ToolError::InputDispatchFailed {
+            detail: format!("event stream: {e}"),
+            libei_version: None,
+            kwin_version: None,
+        })?;
+        match &event {
+            reis::event::EiEvent::SeatAdded(evt) => {
+                let mut bind: enumflags2::BitFlags<DeviceCapability> =
+                    DeviceCapability::Scroll.into();
+                if expect_keyboard {
+                    bind |= DeviceCapability::Keyboard;
+                }
+                if expect_pointer {
+                    bind |= DeviceCapability::Pointer
+                        | DeviceCapability::PointerAbsolute
+                        | DeviceCapability::Button;
+                }
+                evt.seat.bind_capabilities(bind);
+                context
+                    .flush()
+                    .map_err(|e| ToolError::InputDispatchFailed {
+                        detail: format!("flush after bind: {e}"),
+                        libei_version: None,
+                        kwin_version: None,
+                    })?;
+            }
+            reis::event::EiEvent::DeviceAdded(evt) => {
+                let has_kb = evt.device.has_capability(DeviceCapability::Keyboard);
+                let has_ptr = evt.device.has_capability(DeviceCapability::PointerAbsolute)
+                    && evt.device.has_capability(DeviceCapability::Button);
+                let match_kb = expect_keyboard && has_kb;
+                let match_ptr = expect_pointer && has_ptr;
+                if match_kb || match_ptr {
+                    chosen_dev = Some(evt.device.clone());
+                }
+            }
+            reis::event::EiEvent::DeviceResumed(evt) => {
+                last_serial = evt.serial;
+                if chosen_dev.is_some() {
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let device = chosen_dev.ok_or_else(|| ToolError::InputDispatchFailed {
+        detail: "no matching device materialised within 3s".into(),
+        libei_version: None,
+        kwin_version: None,
+    })?;
+    Ok((context, device, last_serial))
 }
