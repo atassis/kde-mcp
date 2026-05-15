@@ -35,6 +35,7 @@ pub struct KdeMcp {
     pub policy: crate::policy::SharedPolicyGate,
     pub bash_session: Arc<std::sync::Mutex<Option<crate::tools::bash::BashSession>>>,
     pub tray: Arc<crate::tray::TrayState>,
+    pub lease: Arc<crate::lease::LeaseStore>,
     pub tool_router: ToolRouter<KdeMcp>,
 }
 
@@ -54,6 +55,11 @@ impl KdeMcp {
         let config = crate::policy::PolicyConfig::load_default().unwrap_or_default();
         let policy = Arc::new(crate::policy::PolicyGate::new(config, cancel.clone()));
         let tray = crate::tray::TrayState::new(cancel);
+        let lease = Arc::new(crate::lease::LeaseStore::new(
+            crate::lease::LeaseConfig::default(),
+            std::process::id(),
+            uuid::Uuid::new_v4().to_string(),
+        ));
         Self {
             mode,
             refs: Arc::new(RefStore::new(Duration::from_secs(60))),
@@ -63,6 +69,7 @@ impl KdeMcp {
             policy,
             bash_session: Arc::new(std::sync::Mutex::new(None)),
             tray,
+            lease,
             tool_router: Self::tool_router(),
         }
     }
@@ -84,12 +91,17 @@ impl KdeMcp {
         let audit = self.audit.clone();
         let mode = self.mode.as_str();
         let tray = self.tray.clone();
-        Ok(
-            dispatch_audited(audit, tray, mode, "observe", v, async move {
-                tools::observe::observe(self, args).await
-            })
-            .await,
+        Ok(dispatch_audited(
+            audit,
+            tray,
+            self.lease.clone(),
+            crate::lease::ToolKind::Observe,
+            mode,
+            "observe",
+            v,
+            async move { tools::observe::observe(self, args).await },
         )
+        .await)
     }
 
     #[tool(
@@ -104,12 +116,17 @@ impl KdeMcp {
         let audit = self.audit.clone();
         let mode = self.mode.as_str();
         let tray = self.tray.clone();
-        Ok(
-            dispatch_audited(audit, tray, mode, "inspect", v, async move {
-                tools::inspect::inspect(self, args).await
-            })
-            .await,
+        Ok(dispatch_audited(
+            audit,
+            tray,
+            self.lease.clone(),
+            crate::lease::ToolKind::Observe,
+            mode,
+            "inspect",
+            v,
+            async move { tools::inspect::inspect(self, args).await },
         )
+        .await)
     }
 
     #[tool(
@@ -124,12 +141,17 @@ impl KdeMcp {
         let audit = self.audit.clone();
         let mode = self.mode.as_str();
         let tray = self.tray.clone();
-        Ok(
-            dispatch_audited(audit, tray, mode, "screenshot", v, async move {
-                tools::screenshot::screenshot(self, args).await
-            })
-            .await,
+        Ok(dispatch_audited(
+            audit,
+            tray,
+            self.lease.clone(),
+            crate::lease::ToolKind::Observe,
+            mode,
+            "screenshot",
+            v,
+            async move { tools::screenshot::screenshot(self, args).await },
         )
+        .await)
     }
 
     #[tool(
@@ -144,12 +166,17 @@ impl KdeMcp {
         let audit = self.audit.clone();
         let mode = self.mode.as_str();
         let tray = self.tray.clone();
-        Ok(
-            dispatch_audited(audit, tray, mode, "read_text", v, async move {
-                tools::read_text::read_text(self, args).await
-            })
-            .await,
+        Ok(dispatch_audited(
+            audit,
+            tray,
+            self.lease.clone(),
+            crate::lease::ToolKind::Observe,
+            mode,
+            "read_text",
+            v,
+            async move { tools::read_text::read_text(self, args).await },
         )
+        .await)
     }
 
     #[tool(
@@ -161,13 +188,17 @@ impl KdeMcp {
         Parameters(args): Parameters<tools::wait::WaitArgs>,
     ) -> Result<CallToolResult, McpError> {
         let v = serde_json::to_value(&args).unwrap_or(serde_json::Value::Null);
+        let kind = crate::lease::classify_tool("wait", &v);
         let audit = self.audit.clone();
         let mode = self.mode.as_str();
         let tray = self.tray.clone();
-        Ok(dispatch_audited(audit, tray, mode, "wait", v, async move {
-            tools::wait::wait(self, args).await
-        })
-        .await)
+        let lease = self.lease.clone();
+        Ok(
+            dispatch_audited(audit, tray, lease, kind, mode, "wait", v, async move {
+                tools::wait::wait(self, args).await
+            })
+            .await,
+        )
     }
 
     // ---- Action (destructive) ----
@@ -184,12 +215,17 @@ impl KdeMcp {
         let audit = self.audit.clone();
         let mode = self.mode.as_str();
         let tray = self.tray.clone();
-        Ok(
-            dispatch_audited(audit, tray, mode, "act_on_element", v, async move {
-                tools::act_on_element::act_on_element(self, args).await
-            })
-            .await,
+        Ok(dispatch_audited(
+            audit,
+            tray,
+            self.lease.clone(),
+            crate::lease::ToolKind::Mutate,
+            mode,
+            "act_on_element",
+            v,
+            async move { tools::act_on_element::act_on_element(self, args).await },
         )
+        .await)
     }
 
     #[tool(
@@ -204,9 +240,16 @@ impl KdeMcp {
         let audit = self.audit.clone();
         let mode = self.mode.as_str();
         let tray = self.tray.clone();
-        Ok(dispatch_audited(audit, tray, mode, "mouse", v, async move {
-            tools::mouse::mouse(self, args).await
-        })
+        Ok(dispatch_audited(
+            audit,
+            tray,
+            self.lease.clone(),
+            crate::lease::ToolKind::Mutate,
+            mode,
+            "mouse",
+            v,
+            async move { tools::mouse::mouse(self, args).await },
+        )
         .await)
     }
 
@@ -223,12 +266,17 @@ impl KdeMcp {
         let audit = self.audit.clone();
         let mode = self.mode.as_str();
         let tray = self.tray.clone();
-        Ok(
-            dispatch_audited(audit, tray, mode, "keyboard.type", v, async move {
-                tools::keyboard::keyboard_type(self, args).await
-            })
-            .await,
+        Ok(dispatch_audited(
+            audit,
+            tray,
+            self.lease.clone(),
+            crate::lease::ToolKind::Mutate,
+            mode,
+            "keyboard.type",
+            v,
+            async move { tools::keyboard::keyboard_type(self, args).await },
         )
+        .await)
     }
 
     #[tool(
@@ -244,12 +292,17 @@ impl KdeMcp {
         let audit = self.audit.clone();
         let mode = self.mode.as_str();
         let tray = self.tray.clone();
-        Ok(
-            dispatch_audited(audit, tray, mode, "keyboard.key", v, async move {
-                tools::keyboard::keyboard_key(self, args).await
-            })
-            .await,
+        Ok(dispatch_audited(
+            audit,
+            tray,
+            self.lease.clone(),
+            crate::lease::ToolKind::Mutate,
+            mode,
+            "keyboard.key",
+            v,
+            async move { tools::keyboard::keyboard_key(self, args).await },
         )
+        .await)
     }
 
     // ---- Window + clipboard (mixed) ----
@@ -266,12 +319,17 @@ impl KdeMcp {
         let audit = self.audit.clone();
         let mode = self.mode.as_str();
         let tray = self.tray.clone();
-        Ok(
-            dispatch_audited(audit, tray, mode, "window_query", v, async move {
-                tools::window::window_query(self, args).await
-            })
-            .await,
+        Ok(dispatch_audited(
+            audit,
+            tray,
+            self.lease.clone(),
+            crate::lease::ToolKind::Observe,
+            mode,
+            "window_query",
+            v,
+            async move { tools::window::window_query(self, args).await },
         )
+        .await)
     }
 
     #[tool(
@@ -286,12 +344,17 @@ impl KdeMcp {
         let audit = self.audit.clone();
         let mode = self.mode.as_str();
         let tray = self.tray.clone();
-        Ok(
-            dispatch_audited(audit, tray, mode, "window_control", v, async move {
-                tools::window::window_control(self, args).await
-            })
-            .await,
+        Ok(dispatch_audited(
+            audit,
+            tray,
+            self.lease.clone(),
+            crate::lease::ToolKind::Mutate,
+            mode,
+            "window_control",
+            v,
+            async move { tools::window::window_control(self, args).await },
         )
+        .await)
     }
 
     #[tool(
@@ -306,12 +369,17 @@ impl KdeMcp {
         let audit = self.audit.clone();
         let mode = self.mode.as_str();
         let tray = self.tray.clone();
-        Ok(
-            dispatch_audited(audit, tray, mode, "clipboard_read", v, async move {
-                tools::clipboard::clipboard_read(self, args).await
-            })
-            .await,
+        Ok(dispatch_audited(
+            audit,
+            tray,
+            self.lease.clone(),
+            crate::lease::ToolKind::Observe,
+            mode,
+            "clipboard_read",
+            v,
+            async move { tools::clipboard::clipboard_read(self, args).await },
         )
+        .await)
     }
 
     #[tool(
@@ -326,12 +394,17 @@ impl KdeMcp {
         let audit = self.audit.clone();
         let mode = self.mode.as_str();
         let tray = self.tray.clone();
-        Ok(
-            dispatch_audited(audit, tray, mode, "clipboard_write", v, async move {
-                tools::clipboard::clipboard_write(self, args).await
-            })
-            .await,
+        Ok(dispatch_audited(
+            audit,
+            tray,
+            self.lease.clone(),
+            crate::lease::ToolKind::Mutate,
+            mode,
+            "clipboard_write",
+            v,
+            async move { tools::clipboard::clipboard_write(self, args).await },
         )
+        .await)
     }
 
     // ---- Shell + filesystem ----
@@ -348,9 +421,16 @@ impl KdeMcp {
         let audit = self.audit.clone();
         let mode = self.mode.as_str();
         let tray = self.tray.clone();
-        Ok(dispatch_audited(audit, tray, mode, "bash", v, async move {
-            tools::bash::bash(self, args).await
-        })
+        Ok(dispatch_audited(
+            audit,
+            tray,
+            self.lease.clone(),
+            crate::lease::ToolKind::Mutate,
+            mode,
+            "bash",
+            v,
+            async move { tools::bash::bash(self, args).await },
+        )
         .await)
     }
 
@@ -367,12 +447,17 @@ impl KdeMcp {
         let audit = self.audit.clone();
         let mode = self.mode.as_str();
         let tray = self.tray.clone();
-        Ok(
-            dispatch_audited(audit, tray, mode, "text_editor.view", v, async move {
-                tools::text_editor::text_editor_view(self, args).await
-            })
-            .await,
+        Ok(dispatch_audited(
+            audit,
+            tray,
+            self.lease.clone(),
+            crate::lease::ToolKind::Observe,
+            mode,
+            "text_editor.view",
+            v,
+            async move { tools::text_editor::text_editor_view(self, args).await },
         )
+        .await)
     }
 
     #[tool(
@@ -388,12 +473,17 @@ impl KdeMcp {
         let audit = self.audit.clone();
         let mode = self.mode.as_str();
         let tray = self.tray.clone();
-        Ok(
-            dispatch_audited(audit, tray, mode, "text_editor.edit", v, async move {
-                tools::text_editor::text_editor_edit(self, args).await
-            })
-            .await,
+        Ok(dispatch_audited(
+            audit,
+            tray,
+            self.lease.clone(),
+            crate::lease::ToolKind::Mutate,
+            mode,
+            "text_editor.edit",
+            v,
+            async move { tools::text_editor::text_editor_edit(self, args).await },
         )
+        .await)
     }
 }
 
@@ -420,9 +510,12 @@ impl ServerHandler for KdeMcp {
 /// - On error, records `ok: false` and the structured error payload.
 /// - The return type is `CallToolResult` so the rmcp `#[tool]` macro can
 ///   `?`-bubble it.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn dispatch_audited<F, T>(
     audit: Arc<AuditLog>,
     tray: Arc<crate::tray::TrayState>,
+    lease: Arc<crate::lease::LeaseStore>,
+    tool_kind: crate::lease::ToolKind,
     mode: &'static str,
     tool: &'static str,
     args: serde_json::Value,
@@ -432,10 +525,53 @@ where
     F: std::future::Future<Output = Result<T, ToolError>>,
     T: serde::Serialize,
 {
+    let lease_held = match tool_kind {
+        crate::lease::ToolKind::Mutate => match lease.acquire(tool).await {
+            Ok(()) => true,
+            Err(e) => {
+                let err: ToolError = e.into();
+                let code = err.code();
+                let msg = err.to_string();
+                let details = serde_json::to_value(&err).unwrap_or(serde_json::Value::Null);
+                let payload = serde_json::json!({ "code": code, "details": details });
+                let r = CallToolResult::error(vec![
+                    Content::text(msg),
+                    Content::text(payload.to_string()),
+                ]);
+                let rec = crate::audit::AuditRecord {
+                    ts: String::new(),
+                    mode,
+                    tool: tool.to_string(),
+                    args: crate::audit::redact(tool, args),
+                    ok: false,
+                    duration_ms: Some(0),
+                    error: Some(payload),
+                    vision_fallback: None,
+                };
+                if let Err(e) = audit.write(rec).await {
+                    tracing::error!(error = %e, tool, "audit write failed");
+                }
+                return r;
+            }
+        },
+        crate::lease::ToolKind::Observe => {
+            // Best-effort refresh; ignore errors (lease file missing is fine).
+            let _ = lease.refresh_if_holder();
+            false
+        }
+    };
     let _guard = crate::tray::TrayGuard::enter(&tray, tool);
     let started = std::time::Instant::now();
     let outcome = fut.await;
     let duration_ms = started.elapsed().as_millis() as u64;
+
+    // On cancel, release immediately so the next session can take over.
+    if lease_held
+        && (tray.cancel.is_cancelled() || matches!(outcome, Err(ToolError::Cancelled { .. })))
+    {
+        let _ = lease.release_if_holder();
+    }
+
     let redacted_args = crate::audit::redact(tool, args);
     let (call_result, audit_error) = match outcome {
         Ok(payload) => {
@@ -486,11 +622,20 @@ mod tests {
     async fn dispatch_audited_writes_a_record_on_success() {
         let (_dir, audit) = fresh_audit().await;
         let path = _dir.path().join("a.jsonl");
+        let xdg = tempfile::tempdir().unwrap();
+        unsafe { std::env::set_var("XDG_RUNTIME_DIR", xdg.path()) };
         let cancel = tokio_util::sync::CancellationToken::new();
         let tray = crate::tray::TrayState::new(cancel);
+        let lease = std::sync::Arc::new(crate::lease::LeaseStore::new(
+            crate::lease::LeaseConfig::default(),
+            std::process::id(),
+            "test".into(),
+        ));
         let r = dispatch_audited(
             audit.clone(),
             tray,
+            lease.clone(),
+            crate::lease::ToolKind::Observe,
             "live",
             "observe",
             serde_json::json!({"detail": "summary"}),
@@ -512,11 +657,20 @@ mod tests {
     async fn dispatch_audited_writes_a_record_on_error() {
         let (_dir, audit) = fresh_audit().await;
         let path = _dir.path().join("a.jsonl");
+        let xdg = tempfile::tempdir().unwrap();
+        unsafe { std::env::set_var("XDG_RUNTIME_DIR", xdg.path()) };
         let cancel = tokio_util::sync::CancellationToken::new();
         let tray = crate::tray::TrayState::new(cancel);
+        let lease = std::sync::Arc::new(crate::lease::LeaseStore::new(
+            crate::lease::LeaseConfig::default(),
+            std::process::id(),
+            "test".into(),
+        ));
         let r = dispatch_audited(
             audit.clone(),
             tray,
+            lease.clone(),
+            crate::lease::ToolKind::Mutate,
             "live",
             "clipboard_write",
             serde_json::json!({"content": "secret"}),
