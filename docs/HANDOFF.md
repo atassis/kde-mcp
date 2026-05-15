@@ -40,7 +40,7 @@ After the checklist is mostly green, tag whichever phase boundary you've validat
 - **Branch:** `main`.
 - **Working tree:** clean.
 - **Tests:** 110 passing (68 unit + 42 integration). `cargo fmt` clean, `cargo clippy --workspace --all-targets -- -D warnings` clean.
-- **`.desktop` install:** the dev `kde-mcp.desktop` at `~/.local/share/applications/` points to `target/release/kde-mcp` so KApplicationTrader authorises ScreenShot2. Re-templated on binary moves.
+- **MCP install (2026-05-15):** binary at `~/.local/bin/kde-mcp` (cargo install), `.desktop` at `~/.local/share/applications/kde-mcp.desktop` (re-templated to match), registered at user scope (`claude mcp add --scope user kde-mcp -- --mode=live`), 8 read-only tools allowlisted in `~/.claude/settings.json`. Full details and rebuild workflow in `docs/MCP-SETUP.md`. `target/release/kde-mcp` is dev-only after this point.
 
 ### Phase 1 progress
 
