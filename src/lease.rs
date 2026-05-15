@@ -9,6 +9,7 @@
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 use std::time::Duration;
 
 #[derive(Debug, Clone, Copy)]
@@ -38,4 +39,11 @@ pub struct LeaseRecord {
     pub acquired_at: DateTime<Utc>,
     pub last_refresh_at: DateTime<Utc>,
     pub expires_at: DateTime<Utc>,
+}
+
+pub fn lease_path() -> PathBuf {
+    let base = std::env::var_os("XDG_RUNTIME_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/tmp"));
+    base.join("kde-mcp").join("lease.json")
 }

@@ -4,7 +4,7 @@
 //! runs don't share lease files.
 
 use chrono::{TimeZone, Utc};
-use kde_mcp::lease::{LeaseConfig, LeaseRecord};
+use kde_mcp::lease::{lease_path, LeaseConfig, LeaseRecord};
 use std::time::Duration;
 
 #[test]
@@ -35,4 +35,13 @@ fn record_round_trips_through_json() {
     );
     let parsed: LeaseRecord = serde_json::from_str(&s).unwrap();
     assert_eq!(parsed, r);
+}
+
+#[test]
+fn lease_path_lives_under_xdg_runtime_dir() {
+    let dir = tempfile::tempdir().unwrap();
+    unsafe { std::env::set_var("XDG_RUNTIME_DIR", dir.path()) };
+    let p = lease_path();
+    assert!(p.starts_with(dir.path()));
+    assert!(p.ends_with("kde-mcp/lease.json"));
 }
