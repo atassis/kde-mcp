@@ -67,6 +67,91 @@ pub(crate) fn pid_alive(_pid: u32) -> bool {
     false
 }
 
+use fd_lock::RwLock;
+use std::fs::OpenOptions;
+use std::io::{Read, Seek, SeekFrom, Write};
+
+#[derive(Debug)]
+pub enum TryOutcome {
+    Acquired,
+    Busy(LeaseRecord),
+}
+
+pub struct LeaseStore {
+    config: LeaseConfig,
+    self_pid: u32,
+    self_session: String,
+}
+
+impl LeaseStore {
+    pub fn new(config: LeaseConfig, self_pid: u32, self_session: String) -> Self {
+        Self {
+            config,
+            self_pid,
+            self_session,
+        }
+    }
+
+    /// Single non-blocking acquire attempt.
+    ///
+    /// Returns `Acquired` when the lease was previously absent, expired,
+    /// stale (holder PID dead), or already ours; in those cases the on-disk
+    /// record is rewritten to reflect *us* as the holder. Returns
+    /// `Busy(holder)` otherwise.
+    pub fn try_acquire_once(&self, intent: &str) -> std::io::Result<TryOutcome> {
+        let path = lease_path();
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let file = OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .truncate(false)
+            .open(&path)?;
+        let mut lock = RwLock::new(file);
+        // Exclusive flock for the duration of the read-modify-write.
+        let mut guard = lock.write()?;
+        guard.seek(SeekFrom::Start(0))?;
+        let mut body = String::new();
+        guard.read_to_string(&mut body)?;
+        let existing: Option<LeaseRecord> = if body.trim().is_empty() {
+            None
+        } else {
+            serde_json::from_str(&body).ok()
+        };
+        let now = Utc::now();
+        let we_can_take = match &existing {
+            None => true,
+            Some(r) if r.holder_pid == self.self_pid => true,
+            Some(r) if !pid_alive(r.holder_pid) => true,
+            Some(r) if r.expires_at <= now => true,
+            Some(_) => false,
+        };
+        if !we_can_take {
+            return Ok(TryOutcome::Busy(existing.unwrap()));
+        }
+        let acquired_at = match &existing {
+            Some(r) if r.holder_pid == self.self_pid => r.acquired_at,
+            _ => now,
+        };
+        let rec = LeaseRecord {
+            holder_pid: self.self_pid,
+            holder_session_id: self.self_session.clone(),
+            holder_intent: intent.to_string(),
+            acquired_at,
+            last_refresh_at: now,
+            expires_at: now + chrono::Duration::from_std(self.config.idle_timeout).unwrap(),
+        };
+        let serialised = serde_json::to_vec(&rec)?;
+        guard.seek(SeekFrom::Start(0))?;
+        guard.set_len(0)?;
+        guard.write_all(&serialised)?;
+        guard.flush()?;
+        Ok(TryOutcome::Acquired)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
