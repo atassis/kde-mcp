@@ -11,4 +11,5 @@ pub use crate::cli::Transport;
 
 pub mod auth;
 pub mod daemon;
+pub mod session;
 pub mod stdio;

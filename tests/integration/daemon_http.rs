@@ -25,6 +25,13 @@ async fn test_server() -> (TempDir, KdeMcp) {
     (tmp, srv)
 }
 
+async fn test_server_audit() -> (TempDir, std::path::PathBuf, KdeMcp) {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let path = tmp.path().join("audit.jsonl");
+    let srv = test_server_with_audit_path(&path).await;
+    (tmp, path, srv)
+}
+
 async fn spawn_daemon_on_ephemeral_port(server: KdeMcp) -> u16 {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
@@ -186,4 +193,108 @@ async fn http_healthz_does_not_require_auth() {
         .await
         .expect("GET /healthz");
     assert!(resp.status().is_success());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn http_tool_call_audit_contains_session_id() {
+    let (_tmp, audit_path, server) = test_server_audit().await;
+    let port = spawn_daemon_on_ephemeral_port(server).await;
+    let client = reqwest::Client::new();
+
+    // 1. initialize and grab the mcp-session-id header so subsequent calls
+    //    are routed to the same session by rmcp.
+    let resp = client
+        .post(format!("http://127.0.0.1:{port}/mcp"))
+        .header("Accept", "application/json, text/event-stream")
+        .header("Content-Type", "application/json")
+        .json(&init_body())
+        .send()
+        .await
+        .expect("POST /mcp init");
+    let mcp_sid = resp
+        .headers()
+        .get("mcp-session-id")
+        .expect("mcp-session-id header on initialize")
+        .clone();
+
+    // 2. tools/call observe → goes through dispatch_audited, which writes a
+    //    record with our session_id attribution.
+    let _ = client
+        .post(format!("http://127.0.0.1:{port}/mcp"))
+        .header("Accept", "application/json, text/event-stream")
+        .header("Content-Type", "application/json")
+        .header("mcp-session-id", mcp_sid)
+        .json(&serde_json::json!({
+            "jsonrpc":"2.0","id":2,"method":"tools/call",
+            "params":{"name":"observe","arguments":{"detail":"summary"}}
+        }))
+        .send()
+        .await
+        .expect("POST /mcp tools/call");
+
+    // 3. Audit writes are async-flushed; give it a moment.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let body = tokio::fs::read_to_string(&audit_path).await.expect("read audit");
+    let observe_line = body
+        .lines()
+        .find(|l| l.contains("\"tool\":\"observe\""))
+        .expect(&format!("audit must contain an observe entry; full body:\n{body}"));
+    let entry: serde_json::Value = serde_json::from_str(observe_line).expect("audit json");
+    assert!(
+        entry["session_id"].as_str().is_some(),
+        "expected session_id on observe audit entry: {entry}"
+    );
+    // UUID format check: 36 chars with hyphens.
+    let sid = entry["session_id"].as_str().unwrap();
+    assert_eq!(sid.len(), 36, "session_id should be a UUID: {sid}");
+    assert_eq!(sid.matches('-').count(), 4);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn http_two_clients_get_distinct_session_ids() {
+    let (_tmp, audit_path, server) = test_server_audit().await;
+    let port = spawn_daemon_on_ephemeral_port(server).await;
+
+    async fn one_client(port: u16, id: u32) {
+        let client = reqwest::Client::new();
+        let resp = client
+            .post(format!("http://127.0.0.1:{port}/mcp"))
+            .header("Accept", "application/json, text/event-stream")
+            .header("Content-Type", "application/json")
+            .json(&serde_json::json!({
+                "jsonrpc":"2.0","id":id,"method":"initialize",
+                "params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"t","version":"0"}}
+            }))
+            .send()
+            .await
+            .expect("init");
+        let mcp_sid = resp.headers().get("mcp-session-id").expect("sid").clone();
+        let _ = client
+            .post(format!("http://127.0.0.1:{port}/mcp"))
+            .header("Accept", "application/json, text/event-stream")
+            .header("Content-Type", "application/json")
+            .header("mcp-session-id", mcp_sid)
+            .json(&serde_json::json!({
+                "jsonrpc":"2.0","id":id+100,"method":"tools/call",
+                "params":{"name":"observe","arguments":{"detail":"summary"}}
+            }))
+            .send()
+            .await
+            .expect("call");
+    }
+    let (_, _) = tokio::join!(one_client(port, 1), one_client(port, 2));
+
+    tokio::time::sleep(Duration::from_millis(250)).await;
+    let body = tokio::fs::read_to_string(&audit_path).await.expect("audit");
+    let sids: std::collections::HashSet<String> = body
+        .lines()
+        .filter(|l| l.contains("\"tool\":\"observe\""))
+        .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+        .filter_map(|v| v["session_id"].as_str().map(String::from))
+        .collect();
+    assert_eq!(
+        sids.len(),
+        2,
+        "expected 2 distinct session_ids across observe audits, got {sids:?}; body:\n{body}"
+    );
 }

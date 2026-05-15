@@ -19,6 +19,10 @@ pub struct AuditRecord {
     pub error: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub vision_fallback: Option<bool>,
+    /// Daemon-mode session attribution (ADR-0012). Omitted in stdio mode,
+    /// where there's only one session per process.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
 }
 
 /// Redact sensitive args before audit-log persistence per spec §9.
@@ -169,6 +173,7 @@ mod tests {
             duration_ms: Some(5),
             error: None,
             vision_fallback: None,
+            session_id: None,
         })
         .await
         .unwrap();
@@ -184,6 +189,34 @@ mod tests {
             v.get("error").is_none(),
             "error should be omitted when None"
         );
+        assert!(
+            v.get("session_id").is_none(),
+            "session_id should be omitted when None (stdio mode)"
+        );
+    }
+
+    #[tokio::test]
+    async fn writes_session_id_when_set() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("audit.jsonl");
+        let log = AuditLog::open(&path).await.unwrap();
+        log.write(AuditRecord {
+            ts: String::new(),
+            mode: "live",
+            tool: "observe".into(),
+            args: json!({}),
+            ok: true,
+            duration_ms: Some(0),
+            error: None,
+            vision_fallback: None,
+            session_id: Some("11111111-2222-3333-4444-555555555555".into()),
+        })
+        .await
+        .unwrap();
+        drop(log);
+        let body = tokio::fs::read_to_string(&path).await.unwrap();
+        let v: Value = serde_json::from_str(body.trim()).unwrap();
+        assert_eq!(v["session_id"], "11111111-2222-3333-4444-555555555555");
     }
 
     #[test]

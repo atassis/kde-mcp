@@ -9,6 +9,7 @@
 //! `127.0.0.1:7575` directly for dev / non-systemd runs.
 
 use crate::server::KdeMcp;
+use crate::transport::session::SessionRegistry;
 use anyhow::{Context, Result};
 use axum::{Json, Router, extract::State, routing::get};
 use rmcp::transport::streamable_http_server::{
@@ -52,17 +53,21 @@ pub async fn serve_with_listener_and_token(
 
     let sessions = Arc::new(AtomicU64::new(0));
     let started_at = Instant::now();
+    let registry = SessionRegistry::new();
 
-    // Each new MCP session gets a fresh clone of `KdeMcp`. KdeMcp's fields
-    // are already `Arc`-backed so cloning is cheap; Phase 5 will use this
-    // closure point to also mint a per-session SessionId + cancel token.
+    // Each new MCP session gets a fresh-cloned `KdeMcp` tagged with a
+    // freshly-minted `SessionId`. The tag flows into the audit log via
+    // `dispatch_audited` so every entry can be attributed to the
+    // session that produced it.
     let server_for_factory = server.clone();
     let sessions_for_factory = sessions.clone();
+    let registry_for_factory = registry.clone();
     let mcp_service = StreamableHttpService::new(
         move || {
+            let (session_id, _cancel) = registry_for_factory.open();
             sessions_for_factory.fetch_add(1, Ordering::Relaxed);
-            // TODO(phase 5): set session_id on the clone before returning.
-            Ok(server_for_factory.clone())
+            tracing::debug!(%session_id, "daemon: new mcp session");
+            Ok(server_for_factory.with_session_id(session_id))
         },
         Arc::new(LocalSessionManager::default()),
         StreamableHttpServerConfig::default(),

@@ -37,6 +37,10 @@ pub struct KdeMcp {
     pub tray: Arc<crate::tray::TrayState>,
     pub lease: Arc<crate::lease::LeaseStore>,
     pub tool_router: ToolRouter<KdeMcp>,
+    /// Daemon-mode session attribution (ADR-0012). Set by the rmcp
+    /// factory closure per new connection; `None` in stdio mode and in
+    /// any clone made before a session is assigned.
+    pub session_id: Option<crate::transport::session::SessionId>,
 }
 
 impl KdeMcp {
@@ -71,7 +75,17 @@ impl KdeMcp {
             tray,
             lease,
             tool_router: Self::tool_router(),
+            session_id: None,
         }
+    }
+
+    /// Return a clone of `self` tagged with the given session id. Used
+    /// by the daemon's rmcp factory closure to give each MCP session a
+    /// uniquely-attributed view of the server (audit, lease handoff).
+    pub fn with_session_id(&self, id: crate::transport::session::SessionId) -> Self {
+        let mut s = self.clone();
+        s.session_id = Some(id);
+        s
     }
 }
 
@@ -90,6 +104,7 @@ impl KdeMcp {
         let v = serde_json::to_value(&args).unwrap_or(serde_json::Value::Null);
         let audit = self.audit.clone();
         let mode = self.mode.as_str();
+        let session_id = self.session_id.map(|s| s.to_string());
         let tray = self.tray.clone();
         Ok(dispatch_audited(
             audit,
@@ -97,6 +112,7 @@ impl KdeMcp {
             self.lease.clone(),
             crate::lease::ToolKind::Observe,
             mode,
+            session_id.clone(),
             "observe",
             v,
             async move { tools::observe::observe(self, args).await },
@@ -115,6 +131,7 @@ impl KdeMcp {
         let v = serde_json::to_value(&args).unwrap_or(serde_json::Value::Null);
         let audit = self.audit.clone();
         let mode = self.mode.as_str();
+        let session_id = self.session_id.map(|s| s.to_string());
         let tray = self.tray.clone();
         Ok(dispatch_audited(
             audit,
@@ -122,6 +139,7 @@ impl KdeMcp {
             self.lease.clone(),
             crate::lease::ToolKind::Observe,
             mode,
+            session_id.clone(),
             "inspect",
             v,
             async move { tools::inspect::inspect(self, args).await },
@@ -140,6 +158,7 @@ impl KdeMcp {
         let v = serde_json::to_value(&args).unwrap_or(serde_json::Value::Null);
         let audit = self.audit.clone();
         let mode = self.mode.as_str();
+        let session_id = self.session_id.map(|s| s.to_string());
         let tray = self.tray.clone();
         Ok(dispatch_audited(
             audit,
@@ -147,6 +166,7 @@ impl KdeMcp {
             self.lease.clone(),
             crate::lease::ToolKind::Observe,
             mode,
+            session_id.clone(),
             "screenshot",
             v,
             async move { tools::screenshot::screenshot(self, args).await },
@@ -165,6 +185,7 @@ impl KdeMcp {
         let v = serde_json::to_value(&args).unwrap_or(serde_json::Value::Null);
         let audit = self.audit.clone();
         let mode = self.mode.as_str();
+        let session_id = self.session_id.map(|s| s.to_string());
         let tray = self.tray.clone();
         Ok(dispatch_audited(
             audit,
@@ -172,6 +193,7 @@ impl KdeMcp {
             self.lease.clone(),
             crate::lease::ToolKind::Observe,
             mode,
+            session_id.clone(),
             "read_text",
             v,
             async move { tools::read_text::read_text(self, args).await },
@@ -191,10 +213,11 @@ impl KdeMcp {
         let kind = crate::lease::classify_tool("wait", &v);
         let audit = self.audit.clone();
         let mode = self.mode.as_str();
+        let session_id = self.session_id.map(|s| s.to_string());
         let tray = self.tray.clone();
         let lease = self.lease.clone();
         Ok(
-            dispatch_audited(audit, tray, lease, kind, mode, "wait", v, async move {
+            dispatch_audited(audit, tray, lease, kind, mode, session_id, "wait", v, async move {
                 tools::wait::wait(self, args).await
             })
             .await,
@@ -214,6 +237,7 @@ impl KdeMcp {
         let v = serde_json::to_value(&args).unwrap_or(serde_json::Value::Null);
         let audit = self.audit.clone();
         let mode = self.mode.as_str();
+        let session_id = self.session_id.map(|s| s.to_string());
         let tray = self.tray.clone();
         Ok(dispatch_audited(
             audit,
@@ -221,6 +245,7 @@ impl KdeMcp {
             self.lease.clone(),
             crate::lease::ToolKind::Mutate,
             mode,
+            session_id.clone(),
             "act_on_element",
             v,
             async move { tools::act_on_element::act_on_element(self, args).await },
@@ -239,6 +264,7 @@ impl KdeMcp {
         let v = serde_json::to_value(&args).unwrap_or(serde_json::Value::Null);
         let audit = self.audit.clone();
         let mode = self.mode.as_str();
+        let session_id = self.session_id.map(|s| s.to_string());
         let tray = self.tray.clone();
         Ok(dispatch_audited(
             audit,
@@ -246,6 +272,7 @@ impl KdeMcp {
             self.lease.clone(),
             crate::lease::ToolKind::Mutate,
             mode,
+            session_id.clone(),
             "mouse",
             v,
             async move { tools::mouse::mouse(self, args).await },
@@ -265,6 +292,7 @@ impl KdeMcp {
         let v = serde_json::to_value(&args).unwrap_or(serde_json::Value::Null);
         let audit = self.audit.clone();
         let mode = self.mode.as_str();
+        let session_id = self.session_id.map(|s| s.to_string());
         let tray = self.tray.clone();
         Ok(dispatch_audited(
             audit,
@@ -272,6 +300,7 @@ impl KdeMcp {
             self.lease.clone(),
             crate::lease::ToolKind::Mutate,
             mode,
+            session_id.clone(),
             "keyboard.type",
             v,
             async move { tools::keyboard::keyboard_type(self, args).await },
@@ -291,6 +320,7 @@ impl KdeMcp {
         let v = serde_json::to_value(&args).unwrap_or(serde_json::Value::Null);
         let audit = self.audit.clone();
         let mode = self.mode.as_str();
+        let session_id = self.session_id.map(|s| s.to_string());
         let tray = self.tray.clone();
         Ok(dispatch_audited(
             audit,
@@ -298,6 +328,7 @@ impl KdeMcp {
             self.lease.clone(),
             crate::lease::ToolKind::Mutate,
             mode,
+            session_id.clone(),
             "keyboard.key",
             v,
             async move { tools::keyboard::keyboard_key(self, args).await },
@@ -318,6 +349,7 @@ impl KdeMcp {
         let v = serde_json::to_value(&args).unwrap_or(serde_json::Value::Null);
         let audit = self.audit.clone();
         let mode = self.mode.as_str();
+        let session_id = self.session_id.map(|s| s.to_string());
         let tray = self.tray.clone();
         Ok(dispatch_audited(
             audit,
@@ -325,6 +357,7 @@ impl KdeMcp {
             self.lease.clone(),
             crate::lease::ToolKind::Observe,
             mode,
+            session_id.clone(),
             "window_query",
             v,
             async move { tools::window::window_query(self, args).await },
@@ -343,6 +376,7 @@ impl KdeMcp {
         let v = serde_json::to_value(&args).unwrap_or(serde_json::Value::Null);
         let audit = self.audit.clone();
         let mode = self.mode.as_str();
+        let session_id = self.session_id.map(|s| s.to_string());
         let tray = self.tray.clone();
         Ok(dispatch_audited(
             audit,
@@ -350,6 +384,7 @@ impl KdeMcp {
             self.lease.clone(),
             crate::lease::ToolKind::Mutate,
             mode,
+            session_id.clone(),
             "window_control",
             v,
             async move { tools::window::window_control(self, args).await },
@@ -368,6 +403,7 @@ impl KdeMcp {
         let v = serde_json::to_value(&args).unwrap_or(serde_json::Value::Null);
         let audit = self.audit.clone();
         let mode = self.mode.as_str();
+        let session_id = self.session_id.map(|s| s.to_string());
         let tray = self.tray.clone();
         Ok(dispatch_audited(
             audit,
@@ -375,6 +411,7 @@ impl KdeMcp {
             self.lease.clone(),
             crate::lease::ToolKind::Observe,
             mode,
+            session_id.clone(),
             "clipboard_read",
             v,
             async move { tools::clipboard::clipboard_read(self, args).await },
@@ -393,6 +430,7 @@ impl KdeMcp {
         let v = serde_json::to_value(&args).unwrap_or(serde_json::Value::Null);
         let audit = self.audit.clone();
         let mode = self.mode.as_str();
+        let session_id = self.session_id.map(|s| s.to_string());
         let tray = self.tray.clone();
         Ok(dispatch_audited(
             audit,
@@ -400,6 +438,7 @@ impl KdeMcp {
             self.lease.clone(),
             crate::lease::ToolKind::Mutate,
             mode,
+            session_id.clone(),
             "clipboard_write",
             v,
             async move { tools::clipboard::clipboard_write(self, args).await },
@@ -420,6 +459,7 @@ impl KdeMcp {
         let v = serde_json::to_value(&args).unwrap_or(serde_json::Value::Null);
         let audit = self.audit.clone();
         let mode = self.mode.as_str();
+        let session_id = self.session_id.map(|s| s.to_string());
         let tray = self.tray.clone();
         Ok(dispatch_audited(
             audit,
@@ -427,6 +467,7 @@ impl KdeMcp {
             self.lease.clone(),
             crate::lease::ToolKind::Mutate,
             mode,
+            session_id.clone(),
             "bash",
             v,
             async move { tools::bash::bash(self, args).await },
@@ -446,6 +487,7 @@ impl KdeMcp {
         let v = serde_json::to_value(&args).unwrap_or(serde_json::Value::Null);
         let audit = self.audit.clone();
         let mode = self.mode.as_str();
+        let session_id = self.session_id.map(|s| s.to_string());
         let tray = self.tray.clone();
         Ok(dispatch_audited(
             audit,
@@ -453,6 +495,7 @@ impl KdeMcp {
             self.lease.clone(),
             crate::lease::ToolKind::Observe,
             mode,
+            session_id.clone(),
             "text_editor.view",
             v,
             async move { tools::text_editor::text_editor_view(self, args).await },
@@ -472,6 +515,7 @@ impl KdeMcp {
         let v = serde_json::to_value(&args).unwrap_or(serde_json::Value::Null);
         let audit = self.audit.clone();
         let mode = self.mode.as_str();
+        let session_id = self.session_id.map(|s| s.to_string());
         let tray = self.tray.clone();
         Ok(dispatch_audited(
             audit,
@@ -479,6 +523,7 @@ impl KdeMcp {
             self.lease.clone(),
             crate::lease::ToolKind::Mutate,
             mode,
+            session_id.clone(),
             "text_editor.edit",
             v,
             async move { tools::text_editor::text_editor_edit(self, args).await },
@@ -517,6 +562,7 @@ pub(crate) async fn dispatch_audited<F, T>(
     lease: Arc<crate::lease::LeaseStore>,
     tool_kind: crate::lease::ToolKind,
     mode: &'static str,
+    session_id: Option<String>,
     tool: &'static str,
     args: serde_json::Value,
     fut: F,
@@ -547,6 +593,7 @@ where
                     duration_ms: Some(0),
                     error: Some(payload),
                     vision_fallback: None,
+                    session_id: session_id.clone(),
                 };
                 if let Err(e) = audit.write(rec).await {
                     tracing::error!(error = %e, tool, "audit write failed");
@@ -600,6 +647,7 @@ where
         duration_ms: Some(duration_ms),
         error: audit_error,
         vision_fallback: None,
+        session_id,
     };
     if let Err(e) = audit.write(rec).await {
         tracing::error!(error = %e, tool, "audit write failed");
@@ -644,6 +692,7 @@ mod tests {
             lease.clone(),
             crate::lease::ToolKind::Observe,
             "live",
+            None,
             "observe",
             serde_json::json!({"detail": "summary"}),
             async { Ok::<_, ToolError>(serde_json::json!({"mode":"live"})) },
@@ -681,6 +730,7 @@ mod tests {
             lease.clone(),
             crate::lease::ToolKind::Mutate,
             "live",
+            None,
             "clipboard_write",
             serde_json::json!({"content": "secret"}),
             async { Err::<serde_json::Value, _>(ToolError::NotImplemented) },
@@ -741,6 +791,7 @@ mod tests {
             lease,
             crate::lease::ToolKind::Mutate,
             "live",
+            None,
             "keyboard.type",
             serde_json::json!({"text": "irrelevant"}),
             async {
