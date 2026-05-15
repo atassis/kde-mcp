@@ -99,8 +99,9 @@ typical agent workflows (mutate → screenshot → think → inspect → think
 The lease releases on whichever fires first:
 
 1. **Process exit.** kde-mcp's stdin reaches EOF (parent Claude Code
-   session exited) → cleanup writes a tombstone (`holder_pid: null`)
-   under exclusive flock.
+   session exited) → cleanup deletes the lease file under exclusive
+   flock. (Tombstone records are unnecessary — a missing file is
+   already the canonical "no holder" state per the acquire rules.)
 2. **Idle timeout.** `now > expires_at` and the holder hasn't called
    anything in `idle_timeout` seconds. Detected lazily on the next
    acquire attempt from any session — no background timer needed.
