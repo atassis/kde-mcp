@@ -30,6 +30,9 @@ pub struct TrayState {
     pub cancel: CancellationToken,
     /// Set to true on `quit`. `main` polls this to drop the rmcp service.
     pub quit_requested: AtomicBool,
+    /// Daemon mode (ADR-0012): number of concurrent MCP sessions
+    /// currently connected. Stays 0 in stdio mode.
+    pub sessions: AtomicUsize,
 }
 
 impl TrayState {
@@ -39,6 +42,7 @@ impl TrayState {
             current_tool: parking_lot::Mutex::new(None),
             cancel,
             quit_requested: AtomicBool::new(false),
+            sessions: AtomicUsize::new(0),
         })
     }
 
@@ -95,14 +99,19 @@ impl Tray for KdeMcpTray {
 
     fn tool_tip(&self) -> ksni::ToolTip {
         let in_flight = self.state.in_flight.load(Ordering::Relaxed);
+        let sessions = self.state.sessions.load(Ordering::Relaxed);
         let current = self.state.current_tool.lock().clone();
-        let title = if in_flight > 0 {
-            format!(
-                "kde-mcp — running {}",
+        let title = match (in_flight, sessions) {
+            (0, 0) => "kde-mcp — idle".into(),
+            (0, n) => format!("kde-mcp — idle, {n} session(s)"),
+            (k, 0) => format!(
+                "kde-mcp — running {} ({k} in flight)",
                 current.as_deref().unwrap_or("(tool)")
-            )
-        } else {
-            "kde-mcp — idle".into()
+            ),
+            (k, n) => format!(
+                "kde-mcp — running {} ({k} in flight, {n} session(s))",
+                current.as_deref().unwrap_or("(tool)")
+            ),
         };
         ksni::ToolTip {
             icon_name: self.icon_name(),

@@ -51,11 +51,14 @@ async fn main() -> Result<()> {
     // effort; SIGUSR1 always works as fallback (`pkill -USR1 kde-mcp`).
     let cancel = kde_mcp::cancel::install(&bootstrapped.bus).await;
     let server = KdeMcp::new_with_cancel(cli.mode, audit_log, bootstrapped.bus, cancel);
-    // System-tray indicator + abort menu (StatusNotifierItem). Runs on its
-    // own thread/runtime; failures are warnings only. Phase 7 will gate
-    // this on transport=daemon; for now both transports get a tray so
-    // stdio behaviour is byte-for-byte preserved.
-    kde_mcp::tray::spawn(server.tray.clone());
+    // System-tray indicator + abort menu (StatusNotifierItem). Daemon
+    // mode owns the (singleton) tray for all connected sessions; stdio
+    // mode skips it because each stdio child would otherwise register
+    // its own SNI item — exactly the proliferation ADR-0012 set out to
+    // fix.
+    if cli.transport == kde_mcp::cli::Transport::Daemon {
+        kde_mcp::tray::spawn(server.tray.clone());
+    }
 
     eprintln!("kde-mcp: ready (mode={mode_name}, transport={transport_name})");
 

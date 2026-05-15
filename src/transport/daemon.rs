@@ -100,10 +100,14 @@ pub async fn serve_with_listener_and_timeout(
     let sessions_for_factory = sessions.clone();
     let registry_for_factory = registry.clone();
     let audit_for_factory = audit.clone();
+    let tray_for_factory = server.tray.clone();
     let mcp_service = StreamableHttpService::new(
         move || {
             let (session_id, _cancel) = registry_for_factory.open();
             sessions_for_factory.fetch_add(1, Ordering::Relaxed);
+            tray_for_factory
+                .sessions
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             tracing::debug!(%session_id, "daemon: new mcp session");
             let audit = audit_for_factory.clone();
             tokio::spawn(async move {
