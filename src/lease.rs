@@ -8,10 +8,10 @@
 //! See `docs/adr/0011-multi-session-lease.md` for the design rationale.
 
 use chrono::{DateTime, Utc};
-use tokio::time::sleep;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::time::Duration;
+use tokio::time::sleep;
 
 #[derive(Debug, Clone, Copy)]
 pub struct LeaseConfig {
@@ -307,22 +307,11 @@ pub enum ToolKind {
 pub fn classify_tool(wire_name: &str, args: &serde_json::Value) -> ToolKind {
     match wire_name {
         // Observation: never acquires, only refreshes when held.
-        "observe"
-        | "inspect"
-        | "screenshot"
-        | "read_text"
-        | "window_query"
-        | "clipboard_read"
+        "observe" | "inspect" | "screenshot" | "read_text" | "window_query" | "clipboard_read"
         | "text_editor.view" => ToolKind::Observe,
         // Mutation: acquires the lease.
-        "act_on_element"
-        | "mouse"
-        | "keyboard.type"
-        | "keyboard.key"
-        | "window_control"
-        | "clipboard_write"
-        | "text_editor.edit"
-        | "bash" => ToolKind::Mutate,
+        "act_on_element" | "mouse" | "keyboard.type" | "keyboard.key" | "window_control"
+        | "clipboard_write" | "text_editor.edit" | "bash" => ToolKind::Mutate,
         // `wait` is mutation-class iff its condition blocks on screen state.
         // `condition: "seconds"` is a pure sleep — Observe.
         "wait" => match args.get("condition").and_then(|v| v.as_str()) {

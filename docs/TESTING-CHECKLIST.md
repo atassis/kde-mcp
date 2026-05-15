@@ -49,7 +49,7 @@ If all green: `git tag phase-2`.
   - [ ] Subsequent tool calls work normally (token resets per call).
   - [ ] Cancel works during `mouse drag` (aborts after the current frame).
   - [ ] Cancel works during long `bash` invocations (signals SIGINT to the child).
-- [ ] **Mode lock check** — Phase 3 makes the lock-held assertion explicit at gate entry. Manually delete `$XDG_RUNTIME_DIR/kde-mcp/live.lock` while a tool call is mid-flight (race; may be hard to hit). Should return `lock_unavailable`.
+- [ ] **Mutation lease coexistence** — start two `kde-mcp --mode=live` instances concurrently. Both should run. Issue a long-running mutating tool (e.g. `keyboard.type` of a long string) on session A; a mutating tool from session B should block on the lease and either succeed after A releases or return `busy { holder_pid, holder_intent, lease_expires_in_ms }` after `acquire_timeout`. Observation tools from B (`observe`, `screenshot`) should never block. See ADR-0011.
 
 ---
 

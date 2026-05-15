@@ -5,7 +5,10 @@
 //! tests that mutate it must serialize via `ENV_LOCK`.
 
 use chrono::{TimeZone, Utc};
-use kde_mcp::lease::{classify_tool, lease_path, AcquireError, LeaseConfig, LeaseRecord, LeaseStore, ToolKind, TryOutcome};
+use kde_mcp::lease::{
+    AcquireError, LeaseConfig, LeaseRecord, LeaseStore, ToolKind, TryOutcome, classify_tool,
+    lease_path,
+};
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -67,7 +70,10 @@ fn try_acquire_on_empty_file_succeeds() {
     );
     let outcome = store.try_acquire_once("keyboard.type").unwrap();
     assert!(matches!(outcome, TryOutcome::Acquired));
-    assert!(expected_path.exists(), "lease file should exist after acquire");
+    assert!(
+        expected_path.exists(),
+        "lease file should exist after acquire"
+    );
 }
 
 #[test]
@@ -253,11 +259,7 @@ async fn acquire_returns_immediately_when_no_holder() {
     let _guard = ENV_LOCK.lock().unwrap();
     let dir = tempfile::tempdir().unwrap();
     unsafe { std::env::set_var("XDG_RUNTIME_DIR", dir.path()) };
-    let store = LeaseStore::new(
-        LeaseConfig::default(),
-        std::process::id(),
-        "us".into(),
-    );
+    let store = LeaseStore::new(LeaseConfig::default(), std::process::id(), "us".into());
     let started = std::time::Instant::now();
     store.acquire("keyboard.type").await.unwrap();
     assert!(started.elapsed() < std::time::Duration::from_millis(50));

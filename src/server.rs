@@ -731,11 +731,7 @@ mod tests {
             idle_timeout: std::time::Duration::from_secs(10),
             acquire_timeout: std::time::Duration::from_millis(250),
         };
-        let lease = std::sync::Arc::new(crate::lease::LeaseStore::new(
-            cfg,
-            u32::MAX,
-            "us".into(),
-        ));
+        let lease = std::sync::Arc::new(crate::lease::LeaseStore::new(cfg, u32::MAX, "us".into()));
         let cancel = tokio_util::sync::CancellationToken::new();
         let tray = crate::tray::TrayState::new(cancel);
         let path = _audit_dir.path().join("a.jsonl");
