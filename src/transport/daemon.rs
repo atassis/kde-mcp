@@ -9,17 +9,9 @@
 //! `127.0.0.1:7575` directly for dev / non-systemd runs.
 
 use crate::server::KdeMcp;
-use crate::transport::session::SessionRegistry;
+use crate::transport::session::{SessionRegistry, SessionScope};
 use anyhow::{Context, Result};
-use axum::{
-    Json, Router,
-    body::Body,
-    extract::State,
-    http::Request,
-    middleware::Next,
-    response::Response,
-    routing::get,
-};
+use axum::{Json, Router, extract::State, routing::get};
 use parking_lot::Mutex;
 use rmcp::transport::streamable_http_server::{
     StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
@@ -36,17 +28,11 @@ use tokio_util::sync::CancellationToken;
 /// next request transparently re-activates the service.
 pub const IDLE_TIMEOUT: Duration = Duration::from_secs(600);
 
-/// Shared state passed to axum handlers.
+/// Shared state passed to the `/healthz` handler.
 #[derive(Clone)]
 struct HealthState {
     started_at: Instant,
     sessions: Arc<AtomicU64>,
-}
-
-#[derive(Clone)]
-struct ActivityState {
-    active_conns: Arc<AtomicU64>,
-    last_active_at: Arc<Mutex<Instant>>,
 }
 
 pub async fn serve(server: KdeMcp) -> Result<()> {
@@ -84,10 +70,11 @@ pub async fn serve_with_listener_and_timeout(
     let sessions = Arc::new(AtomicU64::new(0));
     let started_at = Instant::now();
     let registry = SessionRegistry::new();
-    let activity = ActivityState {
-        active_conns: Arc::new(AtomicU64::new(0)),
-        last_active_at: Arc::new(Mutex::new(Instant::now())),
-    };
+    // Watchdog signal: stamped on daemon startup and on every
+    // `SessionScope::drop` (i.e. genuine session end). The idle
+    // watchdog measures `last_active_at.elapsed() >= idle` only when
+    // `registry.count() == 0`.
+    let last_active_at = Arc::new(Mutex::new(Instant::now()));
 
     let audit = server.audit.clone();
     audit
@@ -101,6 +88,7 @@ pub async fn serve_with_listener_and_timeout(
     let registry_for_factory = registry.clone();
     let audit_for_factory = audit.clone();
     let tray_for_factory = server.tray.clone();
+    let last_active_for_factory = last_active_at.clone();
     let mcp_service = StreamableHttpService::new(
         move || {
             let (session_id, _cancel) = registry_for_factory.open();
@@ -109,16 +97,28 @@ pub async fn serve_with_listener_and_timeout(
                 .sessions
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             tracing::debug!(%session_id, "daemon: new mcp session");
-            let audit = audit_for_factory.clone();
+            let audit_clone = audit_for_factory.clone();
             tokio::spawn(async move {
-                let _ = audit
+                let _ = audit_clone
                     .write_event(
                         "session_open",
                         json!({"session_id": session_id.to_string()}),
                     )
                     .await;
             });
-            Ok(server_for_factory.with_session_id(session_id))
+            // The scope holds bookkeeping for session-end: when rmcp
+            // drops the last clone of this per-session `KdeMcp`,
+            // `SessionScope::drop` decrements the tray's session
+            // counter, closes the registry entry, stamps
+            // `last_active_at`, and writes `session_close`.
+            let scope = Arc::new(SessionScope::new(
+                session_id,
+                registry_for_factory.clone(),
+                tray_for_factory.clone(),
+                audit_for_factory.clone(),
+                last_active_for_factory.clone(),
+            ));
+            Ok(server_for_factory.with_session_scope(scope))
         },
         Arc::new(LocalSessionManager::default()),
         StreamableHttpServerConfig::default(),
@@ -133,13 +133,7 @@ pub async fn serve_with_listener_and_timeout(
         .route("/healthz", get(healthz))
         .with_state(health_state);
 
-    let mcp_router = Router::new()
-        .route_service("/mcp", mcp_service)
-        .layer(axum::middleware::from_fn_with_state(
-            activity.clone(),
-            conn_tracking_middleware,
-        ));
-
+    let mcp_router = Router::new().route_service("/mcp", mcp_service);
     let mcp_router = if let Some(tok) = token {
         let auth = AuthState { token: tok };
         mcp_router.layer(axum::middleware::from_fn_with_state(
@@ -174,9 +168,14 @@ pub async fn serve_with_listener_and_timeout(
         }
     });
 
-    // Idle watchdog — if no active connections for `idle`, fire the stop token.
+    // Idle watchdog — when the registry reports zero open MCP sessions
+    // AND `last_active_at` (updated by `SessionScope::drop`) is past
+    // the idle threshold, fire the stop token. `last_active_at` is
+    // initialised to `Instant::now()` at startup so a fresh daemon
+    // with no traffic idles out after `idle` wall-clock too.
     let stop_for_idle = stop.clone();
-    let activity_for_idle = activity.clone();
+    let registry_for_idle = registry.clone();
+    let last_active_for_idle = last_active_at.clone();
     let audit_for_idle = audit.clone();
     tokio::spawn(async move {
         loop {
@@ -184,12 +183,8 @@ pub async fn serve_with_listener_and_timeout(
             if stop_for_idle.is_cancelled() {
                 return;
             }
-            if activity_for_idle
-                .active_conns
-                .load(Ordering::Relaxed)
-                == 0
-            {
-                let last = *activity_for_idle.last_active_at.lock();
+            if registry_for_idle.count() == 0 {
+                let last = *last_active_for_idle.lock();
                 if last.elapsed() >= idle {
                     tracing::info!(?idle, "daemon: idle stop");
                     let _ = audit_for_idle
@@ -222,22 +217,6 @@ async fn healthz(State(state): State<HealthState>) -> Json<serde_json::Value> {
         "uptime_s": state.started_at.elapsed().as_secs(),
         "sessions": state.sessions.load(Ordering::Relaxed),
     }))
-}
-
-/// axum middleware that bumps `active_conns` on entry, refreshes
-/// `last_active_at`, and decrements on response. The idle watchdog
-/// inspects both atomics to decide when to fire its stop token.
-async fn conn_tracking_middleware(
-    State(state): State<ActivityState>,
-    req: Request<Body>,
-    next: Next,
-) -> Response {
-    state.active_conns.fetch_add(1, Ordering::Relaxed);
-    *state.last_active_at.lock() = Instant::now();
-    let resp = next.run(req).await;
-    state.active_conns.fetch_sub(1, Ordering::Relaxed);
-    *state.last_active_at.lock() = Instant::now();
-    resp
 }
 
 /// Returns a listener — preferring systemd's inherited fd if available,

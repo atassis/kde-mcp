@@ -41,6 +41,12 @@ pub struct KdeMcp {
     /// factory closure per new connection; `None` in stdio mode and in
     /// any clone made before a session is assigned.
     pub session_id: Option<crate::transport::session::SessionId>,
+    /// RAII guard whose `Drop` fires once rmcp lets go of the last
+    /// clone of this per-session `KdeMcp`. Bookkeeping happens there:
+    /// registry close, tray-session decrement, last-active stamp,
+    /// `session_close` audit. `None` in stdio mode and for any clone
+    /// minted before [`with_session_scope`] runs.
+    pub _session_scope: Option<Arc<crate::transport::session::SessionScope>>,
 }
 
 impl KdeMcp {
@@ -76,6 +82,7 @@ impl KdeMcp {
             lease,
             tool_router: Self::tool_router(),
             session_id: None,
+            _session_scope: None,
         }
     }
 
@@ -85,6 +92,19 @@ impl KdeMcp {
     pub fn with_session_id(&self, id: crate::transport::session::SessionId) -> Self {
         let mut s = self.clone();
         s.session_id = Some(id);
+        s
+    }
+
+    /// Same as [`with_session_id`] plus attaches a [`SessionScope`]
+    /// guard whose `Drop` runs when rmcp finally lets go of this
+    /// clone. The daemon uses this to detect real session-end timing
+    /// (which the response-return-time middleware was racing past).
+    pub fn with_session_scope(
+        &self,
+        scope: Arc<crate::transport::session::SessionScope>,
+    ) -> Self {
+        let mut s = self.with_session_id(scope.session_id());
+        s._session_scope = Some(scope);
         s
     }
 }

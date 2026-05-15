@@ -16,8 +16,12 @@
 //! tray, and the cancel layer.
 
 use dashmap::DashMap;
+use parking_lot::Mutex;
+use serde_json::json;
 use std::str::FromStr;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
+use std::time::Instant;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
@@ -111,6 +115,73 @@ impl SessionRegistry {
         for entry in self.inner.iter() {
             entry.cancel.cancel();
         }
+    }
+}
+
+/// RAII guard attached to each daemon-mode session's `KdeMcp` clone.
+/// On drop (when rmcp lets go of the last reference) it:
+///   1. Closes the session in the `SessionRegistry`.
+///   2. Decrements the tray's session counter.
+///   3. Stamps `last_active_at` with `Instant::now()` so the idle
+///      watchdog measures "wall-clock since the last session ended",
+///      not "wall-clock since the response was returned" (the prior
+///      axum-middleware approach was wrong for SSE — middleware exits
+///      at response-construction, body keeps streaming async).
+///   4. Writes a `session_close` audit event.
+///
+/// `SessionScope` is held by `KdeMcp::_session_scope` as
+/// `Option<Arc<SessionScope>>`. Cloning `KdeMcp` bumps the Arc; the
+/// guard fires only when the last clone drops.
+pub struct SessionScope {
+    session_id: SessionId,
+    registry: SessionRegistry,
+    tray: Arc<crate::tray::TrayState>,
+    audit: Arc<crate::audit::AuditLog>,
+    last_active_at: Arc<Mutex<Instant>>,
+    rt: tokio::runtime::Handle,
+}
+
+impl SessionScope {
+    pub fn new(
+        session_id: SessionId,
+        registry: SessionRegistry,
+        tray: Arc<crate::tray::TrayState>,
+        audit: Arc<crate::audit::AuditLog>,
+        last_active_at: Arc<Mutex<Instant>>,
+    ) -> Self {
+        Self {
+            session_id,
+            registry,
+            tray,
+            audit,
+            last_active_at,
+            rt: tokio::runtime::Handle::current(),
+        }
+    }
+
+    pub fn session_id(&self) -> SessionId {
+        self.session_id
+    }
+}
+
+impl Drop for SessionScope {
+    fn drop(&mut self) {
+        let sid = self.session_id;
+        self.registry.close(sid);
+        self.tray.sessions.fetch_sub(1, Ordering::Relaxed);
+        *self.last_active_at.lock() = Instant::now();
+        let audit = self.audit.clone();
+        // `Handle::spawn` is safe to call from a sync Drop as long as the
+        // runtime isn't shutting down. We swallow JoinHandle deliberately;
+        // missing a session_close audit at process exit is acceptable.
+        let _ = self.rt.spawn(async move {
+            let _ = audit
+                .write_event(
+                    "session_close",
+                    json!({"session_id": sid.to_string()}),
+                )
+                .await;
+        });
     }
 }
 
