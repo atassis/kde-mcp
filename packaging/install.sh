@@ -4,17 +4,20 @@
 # Idempotent — safe to re-run after rebuilds or config changes.
 #
 # Usage:
-#   ./packaging/install.sh                  # binary + live-mode MCP + allowlist (default)
-#   ./packaging/install.sh --with-virtual   # also register virtual-mode entry
-#   ./packaging/install.sh --skip-mcp       # build/install binary only; no Claude config
-#   ./packaging/install.sh --skip-allowlist # register MCP but don't touch settings.json
-#   ./packaging/install.sh --prefix=/usr/local  # custom install prefix (needs writable dest)
+#   ./packaging/install.sh                       # auto-detect transport (daemon on KDE-Wayland; stdio else)
+#   ./packaging/install.sh --transport=daemon    # force HTTP daemon (ADR-0012)
+#   ./packaging/install.sh --transport=stdio     # force one-stdio-child-per-session
+#   ./packaging/install.sh --with-virtual        # also register virtual-mode entry (stdio only)
+#   ./packaging/install.sh --skip-mcp            # build/install binary only; no Claude config
+#   ./packaging/install.sh --skip-allowlist      # register MCP but don't touch settings.json
+#   ./packaging/install.sh --prefix=/usr/local   # custom install prefix (needs writable dest)
 #
-# See docs/MCP-SETUP.md for what each step does and why.
+# See docs/MCP-SETUP.md and docs/adr/0012-singleton-daemon-http.md.
 
 set -euo pipefail
 
 PREFIX="${PREFIX:-$HOME/.local}"
+TRANSPORT=""
 WITH_VIRTUAL=0
 SKIP_MCP=0
 SKIP_ALLOWLIST=0
@@ -29,10 +32,26 @@ while [[ $# -gt 0 ]]; do
         --skip-mcp)        SKIP_MCP=1;         shift ;;
         --skip-allowlist)  SKIP_ALLOWLIST=1;   shift ;;
         --prefix=*)        PREFIX="${1#*=}";   shift ;;
+        --transport=*)     TRANSPORT="${1#*=}"; shift ;;
         -h|--help)         usage; exit 0 ;;
         *)                 echo "unknown argument: $1" >&2; usage >&2; exit 2 ;;
     esac
 done
+
+# Auto-detect transport if not specified. Daemon by default on KDE+Wayland;
+# stdio elsewhere (headless server OS, GNOME, etc.).
+if [[ -z "$TRANSPORT" ]]; then
+    if [[ "${XDG_CURRENT_DESKTOP:-}" =~ KDE ]] && [[ "${XDG_SESSION_TYPE:-}" == "wayland" ]]; then
+        TRANSPORT="daemon"
+    else
+        TRANSPORT="stdio"
+    fi
+    echo "==> auto-detected transport: $TRANSPORT"
+fi
+case "$TRANSPORT" in
+    daemon|stdio) ;;
+    *) echo "error: --transport must be 'daemon' or 'stdio', got '$TRANSPORT'" >&2; exit 2 ;;
+esac
 
 # Run from repo root regardless of caller's cwd.
 REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -80,18 +99,48 @@ command -v update-desktop-database >/dev/null 2>&1 \
 command -v kbuildsycoca6 >/dev/null 2>&1 \
     && kbuildsycoca6 --noincremental >/dev/null 2>&1 || true
 
+if [[ "$TRANSPORT" == "daemon" ]]; then
+    echo "==> installing systemd-user units (ADR-0012)"
+    SYSTEMD_DIR="$HOME/.config/systemd/user"
+    install -D -m 0644 packaging/kde-mcp.socket  "$SYSTEMD_DIR/kde-mcp.socket"
+    install -D -m 0644 packaging/kde-mcp.service "$SYSTEMD_DIR/kde-mcp.service"
+    systemctl --user daemon-reload
+    # Stop any prior running unit so the new binary is picked up cleanly.
+    systemctl --user stop kde-mcp.service 2>/dev/null || true
+    systemctl --user enable --now kde-mcp.socket
+    # Force-spawn the service to mint the token before claude mcp add.
+    for _ in 1 2 3 4 5; do
+        if curl -fsS http://127.0.0.1:7575/healthz >/dev/null 2>&1; then
+            break
+        fi
+        sleep 0.5
+    done
+fi
+
 if [[ $SKIP_MCP -eq 0 ]]; then
-    register_server() {
-        local name="$1"; shift
-        # remove-then-add makes this idempotent without parsing existing config
-        claude mcp remove --scope user "$name" >/dev/null 2>&1 || true
-        claude mcp add --transport stdio --scope user "$name" -- "$BIN" "$@"
-    }
-    echo "==> registering kde-mcp (live) at user scope"
-    register_server "kde-mcp" --mode=live
-    if [[ $WITH_VIRTUAL -eq 1 ]]; then
-        echo "==> registering kde-mcp-virtual at user scope"
-        register_server "kde-mcp-virtual" --mode=virtual --vnc=5910
+    echo "==> registering kde-mcp at user scope (transport=$TRANSPORT)"
+    claude mcp remove --scope user kde-mcp >/dev/null 2>&1 || true
+    if [[ "$TRANSPORT" == "daemon" ]]; then
+        TOKEN_FILE="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/kde-mcp/token"
+        if [[ ! -f "$TOKEN_FILE" ]]; then
+            echo "error: daemon token file missing at $TOKEN_FILE" >&2
+            echo "  (the daemon may not have started — check 'journalctl --user -u kde-mcp.service')" >&2
+            exit 1
+        fi
+        TOKEN="$(cat "$TOKEN_FILE")"
+        claude mcp add --transport http --scope user kde-mcp http://127.0.0.1:7575/mcp \
+            --header "Authorization: Bearer $TOKEN"
+    else
+        register_stdio() {
+            local name="$1"; shift
+            claude mcp remove --scope user "$name" >/dev/null 2>&1 || true
+            claude mcp add --transport stdio --scope user "$name" -- "$BIN" "$@" --transport=stdio
+        }
+        register_stdio "kde-mcp" --mode=live
+        if [[ $WITH_VIRTUAL -eq 1 ]]; then
+            echo "==> registering kde-mcp-virtual at user scope"
+            register_stdio "kde-mcp-virtual" --mode=virtual --vnc=5910
+        fi
     fi
 fi
 
@@ -143,9 +192,24 @@ if [[ $SKIP_MCP -eq 0 ]]; then
     claude mcp list 2>&1 | grep -E '^kde-mcp' | sed 's/^/      /'
 fi
 
-cat <<'NOTE'
-
-Done. Open a fresh Claude Code session to pick up the new server.
+echo
+case "$TRANSPORT" in
+    daemon)
+        cat <<'NOTE'
+Done — daemon mode (ADR-0012).
+  Verify:  curl -fsS http://127.0.0.1:7575/healthz
+  Logs:    journalctl --user -u kde-mcp.service -f
+  Status:  systemctl --user status kde-mcp.service kde-mcp.socket
+  Stop:    systemctl --user stop kde-mcp.socket
+Open a fresh Claude Code session to pick up the new MCP entry.
+NOTE
+        ;;
+    stdio)
+        cat <<'NOTE'
+Done — stdio mode.
+Open a fresh Claude Code session to pick up the new server.
 First call will fire a KDE notification ("Claude acquired your desktop"); that's by design.
 See docs/MCP-SETUP.md for operational gotchas.
 NOTE
+        ;;
+esac

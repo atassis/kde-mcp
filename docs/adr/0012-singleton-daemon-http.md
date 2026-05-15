@@ -1,6 +1,6 @@
 # ADR-0012: Singleton daemon with HTTP transport for multi-session desktop use
 
-**Status:** Proposed (2026-05-15)
+**Status:** Accepted (2026-05-16)
 
 Additive to [[0011-multi-session-lease]]: the lease semantics are unchanged. This ADR adds a long-running daemon process that replaces the per-Claude-Code-session subprocess explosion. Stdio mode is preserved as a co-equal peer for headless/CI use.
 

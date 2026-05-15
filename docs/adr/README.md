@@ -19,7 +19,7 @@ Format: 1-2 pages each. Sections: Status · Context · Decision · Consequences 
 | 0009 | Phase 3–6 implementation shape (per-call EIS, SIGUSR1 cancel, …) | Accepted (§2 superseded by 0010) |
 | 0010 | Cancel UX: system tray + Meta+Esc hotkey + dispatch hooks | Accepted (Meta+Esc handoff amended by 0011) |
 | 0011 | Multi-session coexistence via per-session mutation lease | Accepted |
-| 0012 | Singleton daemon with HTTP transport for multi-session desktop use | Proposed |
+| 0012 | Singleton daemon with HTTP transport for multi-session desktop use | Accepted |
 
 ## When to add an ADR
 
