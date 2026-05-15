@@ -370,7 +370,89 @@ Each step calls one tool via the live MCP session, validates the response struct
 
 ## Layer 4 — Bug-bounty probes
 
-*(Filled in by Task 5 of the implementation plan.)*
+A subset of the six items at `docs/TESTING-CHECKLIST.md:172`. Only the ones observable from *outside* the binary make sense in this layer; ones that need EIS-frame instrumentation are explicit non-goals for v1 (would require build flag + log capture; tracked as a future addition).
+
+- **B3 (KEEP):** `clipboard_write content=<base64-encoded random 32 bytes> encoding=base64`; `clipboard_read`; decode response; assert bytes round-trip.
+- **B4 (CONDITIONAL on multi-monitor):** Detect `>1` monitor in `env.json`. If yes: `screenshot region=[x,y,w,h]` straddling the seam; record returned dims and visually-inspect that both monitor regions are populated (save PNG for human eyes). If single-monitor: skip with `skipped(precondition: single monitor)`.
+- **B5 (KEEP):** Open Dolphin via `bash launch=dolphin`; `wait` for window; `inspect target=window:<uuid> max_elements=10000`; assert returns in <5 s with `truncated=false` *or* `truncated=true` (either is OK — the failure is hanging / OOM); record element_count.
+- **B6 (KEEP):** `wait condition=screen_change pixel_threshold=0.05 timeout_ms=500` against a confirmed-static screen; assert `matched=false` and `code="timeout"` within 600 ms.
+
+### L4.B3 — clipboard binary round-trip
+**TC-Ref:** TESTING-CHECKLIST.md §"Quick-fire bug-bounty list" line 176
+**Goal:** Prove `clipboard_write` with `encoding=base64` decodes server-side, not just stores the literal base64 string.
+**Pre:** `wl-clipboard` installed (else F4 skip).
+**Depends-on:** L1.4
+**Steps:**
+1. `bash`: Generate a deterministic 16-byte binary input (includes NUL + high-bit bytes that would be mangled by any text-mode handling):
+
+   ```sh
+   printf 'kde-mcp\x00binary\xff\x7f' > /tmp/runbook-b3-input.bin
+   base64 /tmp/runbook-b3-input.bin
+   ```
+
+   Record the base64 output as `<b64>` and the sha256 of the raw input as `<sha256_in>` (via `sha256sum /tmp/runbook-b3-input.bin`).
+2. Call `mcp__kde-mcp__clipboard_write` with `{"content": "<b64>", "encoding": "base64"}`.
+3. Call `mcp__kde-mcp__clipboard_read` with `{}`. Save full response to `runs/$run_id/L4.B3-readback.json`.
+4. `bash`: extract the response's content (it may be a string or base64; check the response's `encoding` field). Decode if needed and write the bytes to `/tmp/runbook-b3-readback.bin`. Compute `sha256_out` via `sha256sum`.
+**Accept:** `sha256_out == sha256_in` (16 bytes round-tripped byte-equal).
+**Artefacts:** `L4.B3-input.b64`, `L4.B3-readback.json`, `L4.B3-result.txt` (PASS/FAIL with both sha256 hashes).
+**On fail:** signature match against KNOWN-FIXES (F4 for clipboard). Else log + continue.
+**Cleanup:** `clipboard_write` an empty string to clear.
+
+### L4.B4 — multi-monitor screenshot region (CONDITIONAL)
+**TC-Ref:** TESTING-CHECKLIST.md §"Quick-fire bug-bounty list" line 177
+**Goal:** Verify a region crossing monitor seams returns coherent pixels.
+**Pre:** `env.json` shows `>= 2` monitors. Else skip with `skipped(precondition: single monitor)`.
+**Depends-on:** L1.6, L1.4
+**Steps:**
+1. Parse `runs/$run_id/env.json` for monitor geometries.
+2. If only one monitor: write `skipped` to progress.jsonl and stop.
+3. Compute a region rectangle that straddles the seam between the first two monitors (e.g., from monitor-1's right edge minus 100 px, spanning 200 px wide, full height of monitor-1).
+4. Call `mcp__kde-mcp__screenshot` with `{"region": [x, y, w, h]}` using the computed values.
+5. Save the returned PNG (or resource_link) to `runs/$run_id/L4.B4-screenshot.png`.
+**Accept:** PNG dimensions match the requested width/height. Both halves of the image (left of seam, right of seam) contain non-uniform pixel data (basic sanity — neither half is all-black).
+**Artefacts:** `L4.B4-screenshot.png`, `L4.B4-result.txt` (notes for human eyes).
+**On fail:** F2 (kbuildsycoca6) for `not_authorized`. Else log + continue.
+**Cleanup:** none.
+
+### L4.B5 — inspect deep tree
+**TC-Ref:** TESTING-CHECKLIST.md §"Quick-fire bug-bounty list" line 178
+**Goal:** Verify `inspect max_elements=10000` against a deep app returns in bounded time without crash.
+**Pre:** Dolphin installed (`which dolphin`). Else skip.
+**Depends-on:** L1.4
+**Steps:**
+1. Call `mcp__kde-mcp__bash` with `{"command": "dolphin &", "restart": false}` (background-launch).
+2. Call `mcp__kde-mcp__wait` with `{"condition": "window_appears", "match": {"class": "org.kde.dolphin"}, "timeout_ms": 5000}`.
+3. From the wait response, grab the window UUID.
+4. Record start time. Call `mcp__kde-mcp__inspect` with `{"target": "window:<uuid>", "max_elements": 10000}`. Record end time.
+5. Save response to `runs/$run_id/L4.B5-inspect.json`.
+**Accept:** Call returns within 5 seconds. Response has an `elements` array (`truncated: true` OR `truncated: false` — both acceptable). No timeout / crash.
+**Artefacts:** `L4.B5-inspect.json`, `L4.B5-timing.txt`.
+**On fail:** log + continue.
+**Cleanup:** `window_control action=close window_uuid=<uuid>`.
+
+### L4.B6 — wait screen_change on static screen
+**TC-Ref:** TESTING-CHECKLIST.md §"Quick-fire bug-bounty list" line 179
+**Goal:** `wait condition=screen_change` against a static screen times out cleanly rather than blocking forever.
+**Pre:** Don't move the mouse or trigger animations during this step.
+**Depends-on:** L1.4
+**Steps:**
+1. Record start time.
+2. Call `mcp__kde-mcp__wait` with `{"condition": "screen_change", "pixel_threshold": 0.05, "timeout_ms": 500}`.
+3. Record end time.
+4. Save response.
+**Accept:** Response has `matched: false`. Elapsed time in `[400, 800] ms`. Error code (if any) is `timeout`.
+**Artefacts:** `L4.B6-wait.json`, `L4.B6-timing.txt`.
+**On fail:** log + continue.
+**Cleanup:** none.
+
+---
+
+### Deferred to v2
+- **B1** — shift release between capital letters in `keyboard.type`. Requires `RUST_LOG=trace` capture of EIS frames; not externally observable.
+- **B2** — mouse double-click coalescing by `qApp->doubleClickInterval()`. Needs a target app's event log or a custom probe widget.
+
+Both are documented in `docs/TESTING-CHECKLIST.md` and will be picked up when EIS-frame instrumentation lands.
 
 ---
 
