@@ -1,6 +1,5 @@
 use anyhow::{Context, Result};
-use kde_mcp::{KdeMcp, audit, cli::parse_and_validate, mode, notify};
-use rmcp::{ServiceExt, transport::stdio};
+use kde_mcp::{KdeMcp, audit, cli::parse_and_validate, mode};
 use std::sync::Arc;
 use tracing_subscriber::EnvFilter;
 
@@ -25,6 +24,7 @@ async fn main() -> Result<()> {
     };
 
     let mode_name = cli.mode.as_str();
+    let transport_name = cli.transport.as_str();
 
     // Virtual mode's bootstrap reads KDE_MCP_VNC_PORT to pass to wayvnc.
     if let Some(port) = cli.vnc {
@@ -52,22 +52,15 @@ async fn main() -> Result<()> {
     let cancel = kde_mcp::cancel::install(&bootstrapped.bus).await;
     let server = KdeMcp::new_with_cancel(cli.mode, audit_log, bootstrapped.bus, cancel);
     // System-tray indicator + abort menu (StatusNotifierItem). Runs on its
-    // own thread/runtime; failures are warnings only.
+    // own thread/runtime; failures are warnings only. Phase 7 will gate
+    // this on transport=daemon; for now both transports get a tray so
+    // stdio behaviour is byte-for-byte preserved.
     kde_mcp::tray::spawn(server.tray.clone());
 
-    eprintln!("kde-mcp: ready (mode={mode_name})");
+    eprintln!("kde-mcp: ready (mode={mode_name}, transport={transport_name})");
 
-    let lease = server.lease.clone();
-
-    let service = server
-        .serve(stdio())
-        .await
-        .inspect_err(|e| tracing::error!("rmcp serve: {e}"))?;
-
-    service.waiting().await?;
-
-    lease.release_if_holder().ok();
-    notify::notify_lease_released(mode_name).await;
-    tracing::info!("shut down cleanly");
-    Ok(())
+    match cli.transport {
+        kde_mcp::cli::Transport::Stdio => kde_mcp::transport::stdio::serve(server).await,
+        kde_mcp::cli::Transport::Daemon => kde_mcp::transport::daemon::serve(server).await,
+    }
 }

@@ -7,6 +7,23 @@ pub enum Mode {
     Virtual,
 }
 
+/// Wire transport for the MCP layer (ADR-0012). `Stdio` is the original
+/// one-client-per-process design where Claude Code spawns a kde-mcp child
+/// and speaks over stdin/stdout. `Daemon` is the singleton HTTP server on
+/// `127.0.0.1:7575`, activated by systemd-user; one process serves any
+/// number of concurrent sessions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Default)]
+#[clap(rename_all = "lowercase")]
+pub enum Transport {
+    /// MCP over stdin/stdout. Default. One client per process; the
+    /// process exits on stdin EOF.
+    #[default]
+    Stdio,
+    /// MCP over HTTP on `127.0.0.1:7575`. Long-running; serves any
+    /// number of concurrent connections.
+    Daemon,
+}
+
 #[derive(Debug, Parser)]
 #[command(
     name = "kde-mcp",
@@ -23,6 +40,12 @@ pub struct Cli {
     /// with --mode=virtual.
     #[arg(long, value_parser = clap::value_parser!(u16).range(1024..))]
     pub vnc: Option<u16>,
+
+    /// Wire transport. `stdio` (default) is one-client-per-process over
+    /// stdin/stdout; `daemon` is a long-running HTTP server on
+    /// `127.0.0.1:7575` activated by systemd-user. See ADR-0012.
+    #[arg(long, value_enum, default_value_t = Transport::Stdio)]
+    pub transport: Transport,
 }
 
 impl Cli {
@@ -56,6 +79,15 @@ impl Mode {
         match self {
             Mode::Live => "live",
             Mode::Virtual => "virtual",
+        }
+    }
+}
+
+impl Transport {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Transport::Stdio => "stdio",
+            Transport::Daemon => "daemon",
         }
     }
 }

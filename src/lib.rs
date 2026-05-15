@@ -13,6 +13,7 @@ pub mod policy_target;
 pub mod refs;
 pub mod server;
 pub mod tools;
+pub mod transport;
 pub mod tray;
 pub mod trust;
 pub mod util;
