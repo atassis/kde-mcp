@@ -82,6 +82,7 @@ pub struct LeaseStore {
     config: LeaseConfig,
     self_pid: u32,
     self_session: String,
+    notif_fired: std::sync::atomic::AtomicBool,
 }
 
 impl LeaseStore {
@@ -90,6 +91,7 @@ impl LeaseStore {
             config,
             self_pid,
             self_session,
+            notif_fired: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -149,6 +151,15 @@ impl LeaseStore {
         guard.set_len(0)?;
         guard.write_all(&serialised)?;
         guard.flush()?;
+        if !self
+            .notif_fired
+            .swap(true, std::sync::atomic::Ordering::SeqCst)
+        {
+            if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                handle.spawn(async { crate::notify::notify_lease_acquired("live").await });
+            }
+            // No runtime → skip notification (e.g., from sync tests).
+        }
         Ok(TryOutcome::Acquired)
     }
 

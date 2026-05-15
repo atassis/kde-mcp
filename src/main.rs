@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use kde_mcp::{KdeMcp, audit, cli::parse_and_validate, lock::ModeLock, mode, notify};
+use kde_mcp::{KdeMcp, audit, cli::parse_and_validate, mode, notify};
 use rmcp::{ServiceExt, transport::stdio};
 use std::sync::Arc;
 use tracing_subscriber::EnvFilter;
@@ -35,12 +35,6 @@ async fn main() -> Result<()> {
         }
     }
 
-    let lock =
-        ModeLock::acquire(mode_name).with_context(|| format!("acquiring {mode_name} mode lock"))?;
-    tracing::info!(lock = %lock.path().display(), "mode lock acquired");
-
-    notify::notify_lock_acquired(mode_name).await;
-
     let bootstrapped = mode::bootstrap(cli.mode)
         .await
         .with_context(|| format!("bootstrapping {mode_name} mode"))?;
@@ -63,6 +57,8 @@ async fn main() -> Result<()> {
 
     eprintln!("kde-mcp: ready (mode={mode_name})");
 
+    let lease = server.lease.clone();
+
     let service = server
         .serve(stdio())
         .await
@@ -70,8 +66,8 @@ async fn main() -> Result<()> {
 
     service.waiting().await?;
 
-    drop(lock);
-    notify::notify_lock_released(mode_name).await;
+    lease.release_if_holder().ok();
+    notify::notify_lease_released(mode_name).await;
     tracing::info!("shut down cleanly");
     Ok(())
 }
