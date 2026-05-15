@@ -31,10 +31,25 @@ struct HealthState {
 
 pub async fn serve(server: KdeMcp) -> Result<()> {
     let listener = pick_listener().await?;
-    serve_with_listener(server, listener).await
+    let token_path = crate::transport::auth::default_token_path();
+    let token = crate::transport::auth::ensure_token(&token_path)
+        .with_context(|| format!("ensure_token at {}", token_path.display()))?;
+    tracing::info!(token_path = %token_path.display(), "daemon: bearer token ready");
+    serve_with_listener_and_token(server, listener, Some(token)).await
 }
 
+/// Convenience for tests: no auth, default token-less behaviour.
 pub async fn serve_with_listener(server: KdeMcp, listener: TcpListener) -> Result<()> {
+    serve_with_listener_and_token(server, listener, None).await
+}
+
+pub async fn serve_with_listener_and_token(
+    server: KdeMcp,
+    listener: TcpListener,
+    token: Option<String>,
+) -> Result<()> {
+    use crate::transport::auth::{AuthState, bearer_middleware};
+
     let sessions = Arc::new(AtomicU64::new(0));
     let started_at = Instant::now();
 
@@ -53,13 +68,31 @@ pub async fn serve_with_listener(server: KdeMcp, listener: TcpListener) -> Resul
         StreamableHttpServerConfig::default(),
     );
 
-    let app = Router::new()
+    let health_state = HealthState {
+        started_at,
+        sessions,
+    };
+
+    let healthz_router = Router::new()
         .route("/healthz", get(healthz))
-        .route_service("/mcp", mcp_service)
-        .with_state(HealthState {
-            started_at,
-            sessions,
-        });
+        .with_state(health_state);
+
+    // /mcp goes through bearer auth (if a token is configured); /healthz
+    // stays open. Keeping the two as separate sub-routers and merging
+    // means the `.layer(...)` on the MCP sub-router doesn't accidentally
+    // wrap /healthz.
+    let mcp_router = Router::new().route_service("/mcp", mcp_service);
+    let mcp_router = if let Some(tok) = token {
+        let auth = AuthState { token: tok };
+        mcp_router.layer(axum::middleware::from_fn_with_state(
+            auth,
+            bearer_middleware,
+        ))
+    } else {
+        mcp_router
+    };
+
+    let app = healthz_router.merge(mcp_router);
 
     if let Ok(addr) = listener.local_addr() {
         tracing::info!(?addr, "daemon listening");
