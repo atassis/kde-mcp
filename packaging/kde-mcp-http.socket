@@ -1,0 +1,11 @@
+[Unit]
+Description=kde-mcp daemon HTTP socket (ADR-0012, TCP loopback)
+PartOf=kde-mcp-http.service
+
+[Socket]
+ListenStream=127.0.0.1:7575
+NoDelay=true
+Accept=false
+
+[Install]
+WantedBy=sockets.target

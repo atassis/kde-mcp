@@ -38,13 +38,14 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# Auto-detect transport if not specified. Unix-socket by default on
-# KDE+Wayland; stdio elsewhere (headless server OS, GNOME, non-systemd).
-# `http` is reachable via `--transport=http` but no systemd unit ships
-# for it — it's a hand-rolled deployment.
+# Auto-detect transport if not specified. `http` on KDE+Wayland for now
+# because Claude Code 2.1.x's HTTP MCP client refuses unix:// URLs;
+# stdio elsewhere (headless server OS, GNOME, non-systemd).
+# Switch the default to `unix` once Claude Code supports unix-socket
+# HTTP MCP — the underlying daemon already does.
 if [[ -z "$TRANSPORT" ]]; then
     if [[ "${XDG_CURRENT_DESKTOP:-}" =~ KDE ]] && [[ "${XDG_SESSION_TYPE:-}" == "wayland" ]]; then
-        TRANSPORT="unix"
+        TRANSPORT="http"
     else
         TRANSPORT="stdio"
     fi
@@ -53,12 +54,13 @@ fi
 case "$TRANSPORT" in
     unix|stdio) ;;
     http)
-        echo "warning: --transport=http is deprecated — Claude Code's HTTP MCP" >&2
-        echo "  client routes loopback through HTTPS_PROXY when set, breaking" >&2
-        echo "  the wire. install.sh ships only the Unix-socket systemd unit;" >&2
-        echo "  for http you'll need to wire systemd yourself. See ADR-0012." >&2
+        echo "note: --transport=http is the current working path. Unix-socket" >&2
+        echo "  is preferred but Claude Code 2.1.x's HTTP MCP client refuses" >&2
+        echo "  unix:// URLs (\"protocol must be http:, https: or s3:\"). When" >&2
+        echo "  Claude Code adds unix-socket support, switch to --transport=unix." >&2
+        echo "  Requires NO_PROXY=127.0.0.1 in the client's shell env." >&2
         ;;
-    *) echo "error: --transport must be 'unix', 'http' (deprecated), or 'stdio'; got '$TRANSPORT'" >&2; exit 2 ;;
+    *) echo "error: --transport must be 'unix' (future), 'http' (current), or 'stdio'; got '$TRANSPORT'" >&2; exit 2 ;;
 esac
 
 # Run from repo root regardless of caller's cwd.
@@ -107,13 +109,15 @@ command -v update-desktop-database >/dev/null 2>&1 \
 command -v kbuildsycoca6 >/dev/null 2>&1 \
     && kbuildsycoca6 --noincremental >/dev/null 2>&1 || true
 
-if [[ "$TRANSPORT" == "unix" ]]; then
-    echo "==> installing systemd-user units (ADR-0012)"
-    SYSTEMD_DIR="$HOME/.config/systemd/user"
+SYSTEMD_DIR="$HOME/.config/systemd/user"
+case "$TRANSPORT" in
+  unix)
+    echo "==> installing kde-mcp.{socket,service} (Unix socket, ADR-0012)"
     install -D -m 0644 packaging/kde-mcp.socket  "$SYSTEMD_DIR/kde-mcp.socket"
     install -D -m 0644 packaging/kde-mcp.service "$SYSTEMD_DIR/kde-mcp.service"
     systemctl --user daemon-reload
     # Stop any prior running unit so the new binary is picked up cleanly.
+    systemctl --user stop kde-mcp-http.service kde-mcp-http.socket 2>/dev/null || true
     systemctl --user stop kde-mcp.service 2>/dev/null || true
     systemctl --user enable --now kde-mcp.socket
     SOCKET_PATH="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/kde-mcp/mcp.sock"
@@ -122,11 +126,26 @@ if [[ "$TRANSPORT" == "unix" ]]; then
         if [[ -S "$SOCKET_PATH" ]]; then
             break
         fi
-        # Trigger socket activation with a tiny dummy connect attempt.
-        timeout 1 bash -c "exec 3<>/dev/tcp/127.0.0.1/0 2>/dev/null" 2>/dev/null
         sleep 0.5
     done
-fi
+    ;;
+  http)
+    echo "==> installing kde-mcp-http.{socket,service} (TCP loopback, deprecated)"
+    install -D -m 0644 packaging/kde-mcp-http.socket  "$SYSTEMD_DIR/kde-mcp-http.socket"
+    install -D -m 0644 packaging/kde-mcp-http.service "$SYSTEMD_DIR/kde-mcp-http.service"
+    systemctl --user daemon-reload
+    systemctl --user stop kde-mcp.service kde-mcp.socket 2>/dev/null || true
+    systemctl --user stop kde-mcp-http.service 2>/dev/null || true
+    systemctl --user enable --now kde-mcp-http.socket
+    # Force-spawn the service so the daemon mints the bearer token.
+    for _ in 1 2 3 4 5; do
+        if curl -fsS http://127.0.0.1:7575/healthz >/dev/null 2>&1; then
+            break
+        fi
+        sleep 0.5
+    done
+    ;;
+esac
 
 if [[ $SKIP_MCP -eq 0 ]]; then
     echo "==> registering kde-mcp at user scope (transport=$TRANSPORT)"
@@ -226,10 +245,14 @@ NOTE
         ;;
     http)
         cat <<'NOTE'
-Done — daemon mode, TCP (deprecated).
+Done — daemon mode, TCP loopback (deprecated; Unix socket preferred
+once Claude Code supports unix:// URLs).
   Verify:  curl -fsS http://127.0.0.1:7575/healthz
-  No systemd unit ships for http — run the daemon manually:
-    kde-mcp --mode=live --transport=http
+  Logs:    journalctl --user -u kde-mcp-http.service -f
+  Status:  systemctl --user status kde-mcp-http.service kde-mcp-http.socket
+  Stop:    systemctl --user stop kde-mcp-http.socket
+Note: clients that route loopback through HTTPS_PROXY (Node-based MCP
+clients) need NO_PROXY=127.0.0.1 set in the environment.
 Open a fresh Claude Code session to pick up the new MCP entry.
 NOTE
         ;;

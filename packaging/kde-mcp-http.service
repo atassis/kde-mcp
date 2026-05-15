@@ -1,0 +1,17 @@
+[Unit]
+Description=kde-mcp daemon (HTTP/TCP MCP server, ADR-0012, deprecated)
+Requires=kde-mcp-http.socket
+After=kde-mcp-http.socket graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/kde-mcp --mode=live --transport=http
+Restart=on-failure
+RestartSec=2
+TimeoutStopSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target
