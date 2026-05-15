@@ -156,7 +156,10 @@ pub enum Action {
 
 pub struct PolicyGate {
     config: PolicyConfig,
-    approvals: Mutex<HashMap<String, ApprovalState>>,
+    /// Shared via `Arc` so the notification action listener (`src/notify.rs`)
+    /// can mutate the map when the user clicks Allow/Deny on a policy-gate
+    /// notification. The gate's own `check()` path locks via the same Arc.
+    approvals: Arc<Mutex<HashMap<String, ApprovalState>>>,
     cancel: CancellationToken,
     /// Disk-backed Session-approval store. `None` for tests — keeps
     /// approvals in-memory only so parallel tests don't contaminate
@@ -197,7 +200,7 @@ fn load_persistent_approvals(path: &Path) -> HashMap<String, ApprovalState> {
     out
 }
 
-fn save_persistent_approvals(path: &Path, approvals: &HashMap<String, ApprovalState>) {
+pub(crate) fn save_persistent_approvals(path: &Path, approvals: &HashMap<String, ApprovalState>) {
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
@@ -218,7 +221,7 @@ impl PolicyGate {
         let approvals = load_persistent_approvals(&path);
         Self {
             config,
-            approvals: Mutex::new(approvals),
+            approvals: Arc::new(Mutex::new(approvals)),
             cancel,
             store_path: Some(path),
         }
@@ -229,7 +232,7 @@ impl PolicyGate {
     pub(crate) fn new_ephemeral(config: PolicyConfig, cancel: CancellationToken) -> Self {
         Self {
             config,
-            approvals: Mutex::new(HashMap::new()),
+            approvals: Arc::new(Mutex::new(HashMap::new())),
             cancel,
             store_path: None,
         }
@@ -315,7 +318,12 @@ impl PolicyGate {
             Some(ApprovalState::Pending) | None => {
                 approvals.insert(class.clone(), ApprovalState::Pending);
                 drop(approvals);
-                let nid = crate::notify::request_app_approval(&class).await;
+                let nid = crate::notify::request_app_approval(
+                    &class,
+                    self.approvals.clone(),
+                    self.store_path.clone(),
+                )
+                .await;
                 return Err(ToolError::AppApprovalRequired {
                     app_class: class,
                     notification_id: nid,

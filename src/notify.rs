@@ -1,4 +1,9 @@
-use notify_rust::{Hint, Notification, Urgency};
+use crate::policy::{save_persistent_approvals, ApprovalState};
+use notify_rust::{ActionResponse, Hint, Notification, NotificationHandle, Urgency};
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::Arc;
+use tokio::sync::Mutex;
 
 pub async fn notify_lease_acquired(mode: &str) {
     let mode_descriptor = match mode {
@@ -21,15 +26,31 @@ pub async fn notify_lease_released(mode: &str) {
     .await;
 }
 
-/// Fire the per-app approval notification (spec §6.0 step 5). Returns the
-/// notification ID for the caller to embed in the `app_approval_required`
-/// response. The notification's action-button handler is wired separately
-/// in `src/cancel.rs` / `src/server.rs` startup — this function only emits.
-pub async fn request_app_approval(app_class: &str) -> Option<u32> {
+/// Fire the per-app approval notification (spec §6.0 step 5) and wire its
+/// action buttons back into the in-memory approvals map. Returns the
+/// notification id for the caller to embed in the `app_approval_required`
+/// response.
+///
+/// Action buttons require a live D-Bus signal listener on the
+/// `NotificationHandle`; without one, Plasma 6 still renders the buttons
+/// but clicking them does nothing. The listener is spawned on a detached
+/// `std::thread` (because notify-rust's `wait_for_action` is blocking and
+/// consumes the handle); when the user clicks, it mutates the approvals
+/// map (and persists Session approvals to disk) so the next gate check
+/// observes the new state.
+pub async fn request_app_approval(
+    app_class: &str,
+    approvals: Arc<Mutex<HashMap<String, ApprovalState>>>,
+    store_path: Option<PathBuf>,
+) -> Option<u32> {
     let app = app_class.to_string();
-    tokio::task::spawn_blocking(move || -> Option<u32> {
-        let handle = Notification::new()
-            .summary(&format!("Allow Claude to control {app}?"))
+    let app_for_show = app.clone();
+
+    // Step 1: synchronously fire the notification on a blocking thread.
+    // notify-rust's `.show()` is sync and creates a zbus Connection it owns.
+    let handle: NotificationHandle = match tokio::task::spawn_blocking(move || {
+        Notification::new()
+            .summary(&format!("Allow Claude to control {app_for_show}?"))
             .body("Claude is requesting permission to send input to this app.")
             .appname("kde-mcp")
             .hint(Hint::Urgency(Urgency::Critical))
@@ -38,12 +59,53 @@ pub async fn request_app_approval(app_class: &str) -> Option<u32> {
             .action("deny", "Deny")
             .timeout(notify_rust::Timeout::Never)
             .show()
-            .ok()?;
-        Some(handle.id())
     })
     .await
-    .ok()
-    .flatten()
+    {
+        Ok(Ok(h)) => h,
+        _ => return None,
+    };
+    let id = handle.id();
+
+    // Step 2: drive `wait_for_action_async` on a tokio task so the zbus
+    // signal listener has a live async runtime to poll. The previous version
+    // used `std::thread::spawn(|| handle.wait_for_action(...))` (sync), which
+    // silently swallowed action signals on Plasma 6 — D-Bus confirmed via
+    // an external listener that `ActionInvoked` was emitted but the sync
+    // wrapper's internal `zbus::block_on` did not deliver it. The async path
+    // keeps the handle's zbus reactor on a polled context.
+    let app_for_listener = app.clone();
+    tokio::spawn(async move {
+        // Keep `handle` alive for the lifetime of the wait.
+        handle
+            .wait_for_action_async(move |action_resp| {
+                let state = match action_resp {
+                    ActionResponse::Custom(s) => match *s {
+                        "approve-session" => Some(ApprovalState::Session),
+                        "approve-once" => Some(ApprovalState::Once),
+                        "deny" => Some(ApprovalState::Denied),
+                        _ => None,
+                    },
+                    ActionResponse::Closed(_) => None,
+                };
+                if let Some(state) = state {
+                    // Closure is sync; mutate via a spawned tokio task so
+                    // we can `.await` the tokio Mutex.
+                    tokio::spawn(async move {
+                        let mut map = approvals.lock().await;
+                        map.insert(app_for_listener, state);
+                        if matches!(state, ApprovalState::Session) {
+                            if let Some(p) = &store_path {
+                                save_persistent_approvals(p, &map);
+                            }
+                        }
+                    });
+                }
+            })
+            .await;
+    });
+
+    Some(id)
 }
 
 /// Fire the "Claude aborted by user" notification when Meta+Esc is pressed.
