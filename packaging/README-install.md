@@ -1,6 +1,21 @@
 # Installation guide
 
-This document covers manual install from source. Distro packages may follow later.
+The fastest path is the scripted install. The manual steps below are kept as a reference for people who want to know what's happening under the hood, or who have a non-standard prefix.
+
+## Scripted install (recommended)
+
+After installing system deps (next section), from the repo root:
+
+```sh
+./packaging/install.sh                 # build + install + register live-mode + allowlist 8 read-only tools
+./packaging/install.sh --with-virtual  # also register the virtual-mode entry (Phase 5 unverified — opt-in)
+./packaging/install.sh --skip-mcp      # build only; skip Claude Code config
+./packaging/install.sh --help          # all flags
+```
+
+To reverse: `./packaging/uninstall.sh` (or `--purge` to also clear `~/.local/state/kde-mcp/`).
+
+See `docs/MCP-SETUP.md` for the full layout, design choices, and operational gotchas.
 
 ## Prerequisites
 
@@ -69,9 +84,13 @@ This is a one-time setup. Until this is done, `screenshot` tool calls will fail 
 
 ## Register with Claude Code
 
+Match the server names the script uses so `~/.claude/settings.json` allowlist entries (`mcp__kde-mcp__*`) line up:
+
 ```sh
-claude mcp add kde-live    ~/.local/bin/kde-mcp -- --mode=live
-claude mcp add kde-virtual ~/.local/bin/kde-mcp -- --mode=virtual --vnc=5910
+claude mcp add --transport stdio --scope user kde-mcp \
+    -- ~/.local/bin/kde-mcp --mode=live
+claude mcp add --transport stdio --scope user kde-mcp-virtual \
+    -- ~/.local/bin/kde-mcp --mode=virtual --vnc=5910
 ```
 
 For Claude Desktop or other MCP hosts, add to your config (e.g. `~/.config/Claude/claude_desktop_config.json`):
@@ -79,11 +98,11 @@ For Claude Desktop or other MCP hosts, add to your config (e.g. `~/.config/Claud
 ```jsonc
 {
   "mcpServers": {
-    "kde-live": {
+    "kde-mcp": {
       "command": "/home/USER/.local/bin/kde-mcp",
       "args": ["--mode=live"]
     },
-    "kde-virtual": {
+    "kde-mcp-virtual": {
       "command": "/home/USER/.local/bin/kde-mcp",
       "args": ["--mode=virtual", "--vnc=5910"]
     }
@@ -95,7 +114,7 @@ For Claude Desktop or other MCP hosts, add to your config (e.g. `~/.config/Claud
 
 Open Claude Code in any directory and ask:
 
-> "Use the kde-live MCP server to call `observe` and tell me what window is focused."
+> "Use the kde-mcp MCP server to call `observe` and tell me what window is focused."
 
 If the server is correctly installed and authorized, you'll get a structured snapshot of your desktop.
 
@@ -119,7 +138,16 @@ Or any other VNC client. The connection is bound to localhost only — not expos
 ## Uninstall
 
 ```sh
+./packaging/uninstall.sh           # removes binary, .desktop, MCP entries, allowlist
+./packaging/uninstall.sh --purge   # also drops ~/.local/state/kde-mcp/
+```
+
+Manual:
+
+```sh
+claude mcp remove --scope user kde-mcp
+claude mcp remove --scope user kde-mcp-virtual  # if registered
 rm ~/.local/bin/kde-mcp ~/.local/share/applications/kde-mcp.desktop
-claude mcp remove kde-live
-claude mcp remove kde-virtual
+kbuildsycoca6 --noincremental
+# strip mcp__kde-mcp__* entries from ~/.claude/settings.json by hand
 ```

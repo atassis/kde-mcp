@@ -4,6 +4,16 @@ Records the install layout chosen on **2026-05-15**, the choices behind it, and 
 
 ---
 
+## TL;DR
+
+```sh
+./packaging/install.sh               # build + install + register at user scope + allowlist read-only tools
+./packaging/install.sh --with-virtual  # also register the virtual-mode entry
+./packaging/uninstall.sh             # reverse (--purge to also drop ~/.local/state/kde-mcp)
+```
+
+The script is idempotent. After a rebuild, re-run `./packaging/install.sh` to push the new binary to `~/.local/bin/`. The rest of this doc explains what those scripts do and why.
+
 ## Install layout
 
 | Artifact | Path | Owner |
@@ -54,6 +64,12 @@ After any code change you want reflected in the running MCP server:
 
 ```sh
 cd ~/repositories/ns/atassis/kde-mcp
+./packaging/install.sh    # rebuilds + replaces ~/.local/bin/kde-mcp; idempotent
+```
+
+Or run cargo directly if you want to skip the Claude-config steps:
+
+```sh
 cargo install --path . --root ~/.local --force
 ```
 
@@ -77,13 +93,20 @@ If the binary path ever moves (e.g. you switch to `/usr/local/bin/`), re-templat
 ## Uninstall
 
 ```sh
+./packaging/uninstall.sh           # removes MCP entries, binary, .desktop, allowlist
+./packaging/uninstall.sh --purge   # also clears ~/.local/state/kde-mcp/ (audit log + approvals)
+```
+
+Manual equivalent:
+
+```sh
 claude mcp remove --scope user kde-mcp
 rm ~/.local/bin/kde-mcp
 rm ~/.local/share/applications/kde-mcp.desktop
 kbuildsycoca6 --noincremental
+# remove the mcp__kde-mcp__* entries from ~/.claude/settings.json by hand
 # optional — also clears persistent approvals + audit history:
 rm -rf ~/.local/state/kde-mcp/
-# leave ~/.claude/settings.json's permissions.allow entries; they're inert without the server.
 ```
 
 ## Verification
