@@ -14,6 +14,8 @@ git tag -l                # phase-0 should be present (phase-1 not yet tagged)
 cargo test --workspace    # 57 tests; should all pass in <5 s after build
 ```
 
+**Autonomous verification:** A fresh Claude Code session can run end-to-end tests by following `docs/runbook/AUTONOMOUS-VERIFICATION.md`. The runbook covers all 16 tools, six product scenarios (S1–S6), and 4 of 6 bug-bounty probes. Per-run artefacts land in `docs/runbook/runs/<id>/` (gitignored). Auto-fix is mechanical only via `docs/runbook/KNOWN-FIXES.md` — no AI debug loop. **Prerequisite:** `./packaging/install.sh` must have been run at least once.
+
 **Phases 0–6 code-complete + all deferrals addressed.** Every tool from spec §6 has a working implementation. Policy gate cross-cuts every destructive tool. Three abort routes (system tray, Meta+Esc, SIGUSR1). 110 tests pass, fmt + clippy clean.
 
 **Critical next step:** open `docs/TESTING-CHECKLIST.md` and run every checkbox you can. Live verification was deliberately deferred to a single batch so KDE notifications don't fire mid-session-by-session. The checklist is grouped by phase and ordered from lightest to heaviest live impact.

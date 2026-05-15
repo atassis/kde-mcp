@@ -1,5 +1,7 @@
 # Testing & verification checklist — to run in parallel / after autonomous writing
 
+> **Some of this is automated.** The runbook at `docs/runbook/AUTONOMOUS-VERIFICATION.md` covers the deterministic items; what remains here is for human eyes (color fidelity, typing feel, manual UX gut-checks) or items that need EIS-frame instrumentation. A fresh session running the runbook will create `docs/runbook/runs/<id>/summary.md` listing which checklist items it touched.
+
 The autonomous push through Phases 3–6 wrote a lot of code that has unit tests but hasn't been run live. This document is the operator's checklist for actually exercising it on the dev machine. Items are grouped by phase and ordered roughly from "lightest live impact" to "heaviest."
 
 **Convention:** each `--mode=live` invocation fires the "Claude is using your computer" KDE notification. Group fixtures into batches if you don't want a dozen notifications across the morning.
