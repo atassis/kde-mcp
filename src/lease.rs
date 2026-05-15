@@ -150,6 +150,61 @@ impl LeaseStore {
         guard.flush()?;
         Ok(TryOutcome::Acquired)
     }
+
+    /// Extend the idle clock if and only if we currently hold the lease.
+    /// Returns true if we refreshed, false otherwise.
+    pub fn refresh_if_holder(&self) -> std::io::Result<bool> {
+        let path = lease_path();
+        if !path.exists() {
+            return Ok(false);
+        }
+        let file = OpenOptions::new().read(true).write(true).open(&path)?;
+        let mut lock = RwLock::new(file);
+        let mut guard = lock.write()?;
+        guard.seek(SeekFrom::Start(0))?;
+        let mut body = String::new();
+        guard.read_to_string(&mut body)?;
+        let mut rec: LeaseRecord = match serde_json::from_str(&body) {
+            Ok(r) => r,
+            Err(_) => return Ok(false),
+        };
+        if rec.holder_pid != self.self_pid {
+            return Ok(false);
+        }
+        let now = Utc::now();
+        rec.last_refresh_at = now;
+        rec.expires_at = now + chrono::Duration::from_std(self.config.idle_timeout).unwrap();
+        let serialised = serde_json::to_vec(&rec)?;
+        guard.seek(SeekFrom::Start(0))?;
+        guard.set_len(0)?;
+        guard.write_all(&serialised)?;
+        guard.flush()?;
+        Ok(true)
+    }
+
+    /// Release the lease iff we hold it. Removes the file.
+    pub fn release_if_holder(&self) -> std::io::Result<()> {
+        let path = lease_path();
+        if !path.exists() {
+            return Ok(());
+        }
+        let file = OpenOptions::new().read(true).write(true).open(&path)?;
+        let mut lock = RwLock::new(file);
+        let mut guard = lock.write()?;
+        guard.seek(SeekFrom::Start(0))?;
+        let mut body = String::new();
+        guard.read_to_string(&mut body)?;
+        let is_ours = serde_json::from_str::<LeaseRecord>(&body)
+            .map(|r| r.holder_pid == self.self_pid)
+            .unwrap_or(false);
+        // Drop the guard before unlinking.
+        drop(guard);
+        if is_ours {
+            // Best-effort: ignore ENOENT if another process raced us.
+            let _ = std::fs::remove_file(&path);
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]

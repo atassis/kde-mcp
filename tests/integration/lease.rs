@@ -145,3 +145,59 @@ fn try_acquire_when_expired_lease_takes_it() {
     let outcome = store.try_acquire_once("keyboard.type").unwrap();
     assert!(matches!(outcome, TryOutcome::Acquired));
 }
+
+#[test]
+fn refresh_if_holder_is_no_op_when_not_holder() {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    unsafe { std::env::set_var("XDG_RUNTIME_DIR", dir.path()) };
+    let path = lease_path();
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let before = LeaseRecord {
+        holder_pid: 1,
+        holder_session_id: "other".into(),
+        holder_intent: "mouse".into(),
+        acquired_at: chrono::Utc::now(),
+        last_refresh_at: chrono::Utc::now(),
+        expires_at: chrono::Utc::now() + chrono::Duration::seconds(30),
+    };
+    std::fs::write(&path, serde_json::to_string(&before).unwrap()).unwrap();
+    let store = LeaseStore::new(LeaseConfig::default(), 99999, "us".into());
+    assert!(!store.refresh_if_holder().unwrap());
+    let body = std::fs::read_to_string(&path).unwrap();
+    let after: LeaseRecord = serde_json::from_str(&body).unwrap();
+    assert_eq!(after, before);
+}
+
+#[test]
+fn refresh_if_holder_extends_expires_at() {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    unsafe { std::env::set_var("XDG_RUNTIME_DIR", dir.path()) };
+    let path = lease_path();
+    let store = LeaseStore::new(LeaseConfig::default(), std::process::id(), "us".into());
+    let _ = store.try_acquire_once("act_on_element").unwrap();
+    let body = std::fs::read_to_string(&path).unwrap();
+    let before: LeaseRecord = serde_json::from_str(&body).unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    assert!(store.refresh_if_holder().unwrap());
+    let body = std::fs::read_to_string(&path).unwrap();
+    let after: LeaseRecord = serde_json::from_str(&body).unwrap();
+    assert_eq!(after.holder_pid, before.holder_pid);
+    assert_eq!(after.acquired_at, before.acquired_at);
+    assert!(after.last_refresh_at >= before.last_refresh_at);
+    assert!(after.expires_at >= before.expires_at);
+}
+
+#[test]
+fn release_if_holder_removes_lease_file() {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    unsafe { std::env::set_var("XDG_RUNTIME_DIR", dir.path()) };
+    let path = lease_path();
+    let store = LeaseStore::new(LeaseConfig::default(), std::process::id(), "us".into());
+    let _ = store.try_acquire_once("clipboard_write").unwrap();
+    assert!(path.exists());
+    store.release_if_holder().unwrap();
+    assert!(!path.exists(), "lease file should be deleted on release");
+}
