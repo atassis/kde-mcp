@@ -72,6 +72,31 @@ fn placeholder_hash(v: &Value) -> String {
     format!("sha256:{digest:x}")
 }
 
+/// Write a lifecycle event (daemon_start, daemon_idle_stop, session_open,
+/// session_close, etc.) to the audit log. Uses `tool` as the event-type
+/// slug for cheap grep / jq filtering. `extra` is merged into the `args`
+/// column.
+impl AuditLog {
+    pub async fn write_event(
+        &self,
+        event: &'static str,
+        extra: Value,
+    ) -> std::io::Result<()> {
+        self.write(AuditRecord {
+            ts: String::new(),
+            mode: "live",
+            tool: event.to_string(),
+            args: extra,
+            ok: true,
+            duration_ms: None,
+            error: None,
+            vision_fallback: None,
+            session_id: None,
+        })
+        .await
+    }
+}
+
 pub fn default_path() -> PathBuf {
     if let Some(state) = std::env::var_os("XDG_STATE_HOME") {
         return PathBuf::from(state).join("kde-mcp/audit.jsonl");

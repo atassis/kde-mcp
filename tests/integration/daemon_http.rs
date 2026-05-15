@@ -251,6 +251,53 @@ async fn http_tool_call_audit_contains_session_id() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn daemon_idles_down_after_short_timeout() {
+    let (_tmp, server) = test_server().await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    // 250 ms idle so the test runs fast.
+    let idle = Duration::from_millis(250);
+    let handle = tokio::spawn(async move {
+        kde_mcp::transport::daemon::serve_with_listener_and_timeout(server, listener, None, idle)
+            .await
+    });
+    // One request keeps `last_active_at` recent.
+    let _ = reqwest::get(format!("http://127.0.0.1:{port}/healthz"))
+        .await
+        .expect("/healthz");
+    // Now wait > idle so the watchdog fires.
+    let res = tokio::time::timeout(Duration::from_secs(3), handle)
+        .await
+        .expect("daemon must exit within 3s of idle-stop firing");
+    assert!(res.is_ok(), "daemon task panicked: {res:?}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn lifecycle_audit_events_recorded() {
+    let (_tmp, audit_path, server) = test_server_audit().await;
+    let port = spawn_daemon_on_ephemeral_port(server).await;
+    // Trigger session_open by issuing initialize.
+    let _ = reqwest::Client::new()
+        .post(format!("http://127.0.0.1:{port}/mcp"))
+        .header("Accept", "application/json, text/event-stream")
+        .header("Content-Type", "application/json")
+        .json(&init_body())
+        .send()
+        .await
+        .expect("init");
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let body = tokio::fs::read_to_string(&audit_path).await.expect("audit");
+    assert!(
+        body.contains("\"tool\":\"daemon_start\""),
+        "daemon_start event missing from audit; body:\n{body}"
+    );
+    assert!(
+        body.contains("\"tool\":\"session_open\""),
+        "session_open event missing from audit; body:\n{body}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn http_two_clients_get_distinct_session_ids() {
     let (_tmp, audit_path, server) = test_server_audit().await;
     let port = spawn_daemon_on_ephemeral_port(server).await;
