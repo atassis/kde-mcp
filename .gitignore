@@ -23,6 +23,10 @@ state/
 *.jsonl
 /tmp-*/
 
+# Runbook per-run artefacts (screenshots, audit excerpts, payloads).
+# The runbook itself (docs/runbook/*.md + scenarios/*.md) is tracked.
+docs/runbook/runs/
+
 # Local config overrides
 .envrc
 config.local.toml
