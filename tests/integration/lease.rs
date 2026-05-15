@@ -5,7 +5,7 @@
 //! tests that mutate it must serialize via `ENV_LOCK`.
 
 use chrono::{TimeZone, Utc};
-use kde_mcp::lease::{lease_path, LeaseConfig, LeaseRecord, LeaseStore, TryOutcome};
+use kde_mcp::lease::{lease_path, AcquireError, LeaseConfig, LeaseRecord, LeaseStore, TryOutcome};
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -200,4 +200,63 @@ fn release_if_holder_removes_lease_file() {
     assert!(path.exists());
     store.release_if_holder().unwrap();
     assert!(!path.exists(), "lease file should be deleted on release");
+}
+
+#[tokio::test]
+async fn acquire_returns_busy_after_short_timeout_when_held() {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    unsafe { std::env::set_var("XDG_RUNTIME_DIR", dir.path()) };
+    let path = lease_path();
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let rec = LeaseRecord {
+        holder_pid: 1, // alive
+        holder_session_id: "blocker".into(),
+        holder_intent: "wait".into(),
+        acquired_at: chrono::Utc::now(),
+        last_refresh_at: chrono::Utc::now(),
+        expires_at: chrono::Utc::now() + chrono::Duration::seconds(30),
+    };
+    std::fs::write(&path, serde_json::to_string(&rec).unwrap()).unwrap();
+
+    let cfg = LeaseConfig {
+        idle_timeout: std::time::Duration::from_secs(10),
+        acquire_timeout: std::time::Duration::from_millis(300),
+    };
+    let store = LeaseStore::new(cfg, 99999, "us".into());
+    let started = std::time::Instant::now();
+    let err = store.acquire("keyboard.type").await.unwrap_err();
+    let elapsed = started.elapsed();
+    assert!(elapsed >= std::time::Duration::from_millis(250));
+    assert!(elapsed < std::time::Duration::from_millis(700));
+    match err {
+        AcquireError::Busy {
+            holder_pid,
+            holder_intent,
+            waited_ms,
+            acquire_timeout_ms,
+            ..
+        } => {
+            assert_eq!(holder_pid, 1);
+            assert_eq!(holder_intent, "wait");
+            assert!(waited_ms >= 250);
+            assert_eq!(acquire_timeout_ms, 300);
+        }
+        AcquireError::Io(e) => panic!("expected Busy, got Io({e})"),
+    }
+}
+
+#[tokio::test]
+async fn acquire_returns_immediately_when_no_holder() {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    unsafe { std::env::set_var("XDG_RUNTIME_DIR", dir.path()) };
+    let store = LeaseStore::new(
+        LeaseConfig::default(),
+        std::process::id(),
+        "us".into(),
+    );
+    let started = std::time::Instant::now();
+    store.acquire("keyboard.type").await.unwrap();
+    assert!(started.elapsed() < std::time::Duration::from_millis(50));
 }

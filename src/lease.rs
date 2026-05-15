@@ -8,6 +8,7 @@
 //! See `docs/adr/0011-multi-session-lease.md` for the design rationale.
 
 use chrono::{DateTime, Utc};
+use tokio::time::sleep;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::time::Duration;
@@ -204,6 +205,54 @@ impl LeaseStore {
             let _ = std::fs::remove_file(&path);
         }
         Ok(())
+    }
+}
+
+#[derive(Debug)]
+pub enum AcquireError {
+    Busy {
+        holder_pid: u32,
+        holder_intent: String,
+        lease_expires_in_ms: u64,
+        waited_ms: u64,
+        acquire_timeout_ms: u64,
+    },
+    Io(std::io::Error),
+}
+
+impl From<std::io::Error> for AcquireError {
+    fn from(e: std::io::Error) -> Self {
+        AcquireError::Io(e)
+    }
+}
+
+impl LeaseStore {
+    /// Async acquire: block (polling at 100ms) until we hold the lease or
+    /// `acquire_timeout` elapses. Returns `Busy` on timeout.
+    pub async fn acquire(&self, intent: &str) -> Result<(), AcquireError> {
+        let started = std::time::Instant::now();
+        let poll = std::time::Duration::from_millis(100);
+        loop {
+            let outcome = self.try_acquire_once(intent)?;
+            match outcome {
+                TryOutcome::Acquired => return Ok(()),
+                TryOutcome::Busy(holder) => {
+                    let elapsed = started.elapsed();
+                    if elapsed >= self.config.acquire_timeout {
+                        let now = Utc::now();
+                        let until = (holder.expires_at - now).num_milliseconds().max(0) as u64;
+                        return Err(AcquireError::Busy {
+                            holder_pid: holder.holder_pid,
+                            holder_intent: holder.holder_intent,
+                            lease_expires_in_ms: until,
+                            waited_ms: elapsed.as_millis() as u64,
+                            acquire_timeout_ms: self.config.acquire_timeout.as_millis() as u64,
+                        });
+                    }
+                    sleep(poll).await;
+                }
+            }
+        }
     }
 }
 
