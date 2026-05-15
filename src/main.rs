@@ -51,12 +51,15 @@ async fn main() -> Result<()> {
     // effort; SIGUSR1 always works as fallback (`pkill -USR1 kde-mcp`).
     let cancel = kde_mcp::cancel::install(&bootstrapped.bus).await;
     let server = KdeMcp::new_with_cancel(cli.mode, audit_log, bootstrapped.bus, cancel);
-    // System-tray indicator + abort menu (StatusNotifierItem). Daemon
-    // mode owns the (singleton) tray for all connected sessions; stdio
-    // mode skips it because each stdio child would otherwise register
-    // its own SNI item — exactly the proliferation ADR-0012 set out to
-    // fix.
-    if cli.transport == kde_mcp::cli::Transport::Daemon {
+    // System-tray indicator + abort menu (StatusNotifierItem). The
+    // singleton daemon transports (Http, Unix) own the tray for all
+    // connected sessions; stdio mode skips it because each stdio child
+    // would otherwise register its own SNI item — exactly the
+    // proliferation ADR-0012 set out to fix.
+    if matches!(
+        cli.transport,
+        kde_mcp::cli::Transport::Http | kde_mcp::cli::Transport::Unix
+    ) {
         kde_mcp::tray::spawn(server.tray.clone());
     }
 
@@ -64,6 +67,7 @@ async fn main() -> Result<()> {
 
     match cli.transport {
         kde_mcp::cli::Transport::Stdio => kde_mcp::transport::stdio::serve(server).await,
-        kde_mcp::cli::Transport::Daemon => kde_mcp::transport::daemon::serve(server).await,
+        kde_mcp::cli::Transport::Http => kde_mcp::transport::daemon::serve_http(server).await,
+        kde_mcp::cli::Transport::Unix => kde_mcp::transport::daemon::serve_unix(server).await,
     }
 }

@@ -1,8 +1,11 @@
-//! HTTP daemon transport tests (ADR-0012).
+//! Daemon transport tests (ADR-0012, amended 2026-05-16 to Unix-only).
 //!
-//! These tests bring up the daemon on an ephemeral port and exercise it
-//! via reqwest. They require a session bus (like all KdeMcp integration
-//! tests). See `tests/integration/tools_list.rs` for the same pattern.
+//! Production binds a `UnixListener`. These tests use `TcpListener` for
+//! tooling ergonomics (reqwest doesn't dial AF_UNIX natively) — the
+//! daemon's `serve_with_listener_*` entry points are generic over
+//! `axum::serve::Listener` precisely so tests can swap in TCP without
+//! changing the production wire. Live AF_UNIX behaviour is verified
+//! post-install via `curl --unix-socket`.
 
 use kde_mcp::{KdeMcp, audit, cli::Mode};
 use std::path::Path;
@@ -41,24 +44,6 @@ async fn spawn_daemon_on_ephemeral_port(server: KdeMcp) -> u16 {
         let _ = kde_mcp::transport::daemon::serve_with_listener(server, listener).await;
     });
     // Allow axum to start accepting.
-    tokio::time::sleep(Duration::from_millis(50)).await;
-    port
-}
-
-async fn spawn_daemon_with_auth(server: KdeMcp, token: &str) -> u16 {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind");
-    let port = listener.local_addr().expect("local_addr").port();
-    let token = token.to_string();
-    tokio::spawn(async move {
-        let _ = kde_mcp::transport::daemon::serve_with_listener_and_token(
-            server,
-            listener,
-            Some(token),
-        )
-        .await;
-    });
     tokio::time::sleep(Duration::from_millis(50)).await;
     port
 }
@@ -139,63 +124,6 @@ async fn http_initialize_bumps_session_counter() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn http_rejects_missing_auth() {
-    let (_tmp, server) = test_server().await;
-    let port = spawn_daemon_with_auth(server, "deadbeef").await;
-    let resp = reqwest::Client::new()
-        .post(format!("http://127.0.0.1:{port}/mcp"))
-        .header("Accept", "application/json, text/event-stream")
-        .header("Content-Type", "application/json")
-        .json(&init_body())
-        .send()
-        .await
-        .expect("POST /mcp");
-    assert_eq!(resp.status().as_u16(), 401);
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn http_rejects_wrong_bearer() {
-    let (_tmp, server) = test_server().await;
-    let port = spawn_daemon_with_auth(server, "deadbeef").await;
-    let resp = reqwest::Client::new()
-        .post(format!("http://127.0.0.1:{port}/mcp"))
-        .header("Accept", "application/json, text/event-stream")
-        .header("Content-Type", "application/json")
-        .header("Authorization", "Bearer feedface")
-        .json(&init_body())
-        .send()
-        .await
-        .expect("POST /mcp");
-    assert_eq!(resp.status().as_u16(), 401);
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn http_accepts_correct_bearer() {
-    let (_tmp, server) = test_server().await;
-    let port = spawn_daemon_with_auth(server, "deadbeef").await;
-    let resp = reqwest::Client::new()
-        .post(format!("http://127.0.0.1:{port}/mcp"))
-        .header("Accept", "application/json, text/event-stream")
-        .header("Content-Type", "application/json")
-        .header("Authorization", "Bearer deadbeef")
-        .json(&init_body())
-        .send()
-        .await
-        .expect("POST /mcp");
-    assert!(resp.status().is_success(), "status={}", resp.status());
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn http_healthz_does_not_require_auth() {
-    let (_tmp, server) = test_server().await;
-    let port = spawn_daemon_with_auth(server, "deadbeef").await;
-    let resp = reqwest::get(format!("http://127.0.0.1:{port}/healthz"))
-        .await
-        .expect("GET /healthz");
-    assert!(resp.status().is_success());
-}
-
-#[tokio::test(flavor = "multi_thread")]
 async fn http_tool_call_audit_contains_session_id() {
     let (_tmp, audit_path, server) = test_server_audit().await;
     let port = spawn_daemon_on_ephemeral_port(server).await;
@@ -258,8 +186,7 @@ async fn daemon_idles_down_after_short_timeout() {
     // 250 ms idle so the test runs fast.
     let idle = Duration::from_millis(250);
     let handle = tokio::spawn(async move {
-        kde_mcp::transport::daemon::serve_with_listener_and_timeout(server, listener, None, idle)
-            .await
+        kde_mcp::transport::daemon::serve_with_listener_and_timeout(server, listener, idle).await
     });
     // One request keeps `last_active_at` recent.
     let _ = reqwest::get(format!("http://127.0.0.1:{port}/healthz"))

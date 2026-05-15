@@ -7,21 +7,34 @@ pub enum Mode {
     Virtual,
 }
 
-/// Wire transport for the MCP layer (ADR-0012). `Stdio` is the original
-/// one-client-per-process design where Claude Code spawns a kde-mcp child
-/// and speaks over stdin/stdout. `Daemon` is the singleton HTTP server on
-/// `127.0.0.1:7575`, activated by systemd-user; one process serves any
-/// number of concurrent sessions.
+/// Wire transport for the MCP layer (ADR-0012, amended 2026-05-16).
+///
+/// Three peers:
+///
+///   - `Stdio` — original one-client-per-process design where the
+///     client (Claude Code) spawns a kde-mcp child over stdin/stdout.
+///     The headless / CI / single-agent fit. Default for backward
+///     compatibility with pre-ADR-0012 installs.
+///   - `Http` — singleton daemon on TCP `127.0.0.1:7575`, bearer-token
+///     auth from `$XDG_RUNTIME_DIR/kde-mcp/token`. **Deprecated** for
+///     desktop use: HTTP clients that respect `HTTPS_PROXY` route
+///     loopback URLs through the configured proxy and fail.
+///     Retained for environments without `systemd --user` or where
+///     a remote bridge tool forwards the port.
+///   - `Unix` — singleton daemon on a Unix-domain socket at
+///     `$XDG_RUNTIME_DIR/kde-mcp/mcp.sock`, mode 0600, no bearer auth
+///     (filesystem permissions replace it). Recommended default on
+///     KDE / Plasma 6 / Wayland.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Default)]
 #[clap(rename_all = "lowercase")]
 pub enum Transport {
-    /// MCP over stdin/stdout. Default. One client per process; the
-    /// process exits on stdin EOF.
+    /// MCP over stdin/stdout. One client per process; exits on stdin EOF.
     #[default]
     Stdio,
-    /// MCP over HTTP on `127.0.0.1:7575`. Long-running; serves any
-    /// number of concurrent connections.
-    Daemon,
+    /// HTTP over TCP `127.0.0.1:7575` with bearer-token auth. Deprecated.
+    Http,
+    /// HTTP over Unix-domain socket. Default for desktop.
+    Unix,
 }
 
 #[derive(Debug, Parser)]
@@ -87,7 +100,8 @@ impl Transport {
     pub fn as_str(self) -> &'static str {
         match self {
             Transport::Stdio => "stdio",
-            Transport::Daemon => "daemon",
+            Transport::Http => "http",
+            Transport::Unix => "unix",
         }
     }
 }

@@ -38,19 +38,27 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# Auto-detect transport if not specified. Daemon by default on KDE+Wayland;
-# stdio elsewhere (headless server OS, GNOME, etc.).
+# Auto-detect transport if not specified. Unix-socket by default on
+# KDE+Wayland; stdio elsewhere (headless server OS, GNOME, non-systemd).
+# `http` is reachable via `--transport=http` but no systemd unit ships
+# for it — it's a hand-rolled deployment.
 if [[ -z "$TRANSPORT" ]]; then
     if [[ "${XDG_CURRENT_DESKTOP:-}" =~ KDE ]] && [[ "${XDG_SESSION_TYPE:-}" == "wayland" ]]; then
-        TRANSPORT="daemon"
+        TRANSPORT="unix"
     else
         TRANSPORT="stdio"
     fi
     echo "==> auto-detected transport: $TRANSPORT"
 fi
 case "$TRANSPORT" in
-    daemon|stdio) ;;
-    *) echo "error: --transport must be 'daemon' or 'stdio', got '$TRANSPORT'" >&2; exit 2 ;;
+    unix|stdio) ;;
+    http)
+        echo "warning: --transport=http is deprecated — Claude Code's HTTP MCP" >&2
+        echo "  client routes loopback through HTTPS_PROXY when set, breaking" >&2
+        echo "  the wire. install.sh ships only the Unix-socket systemd unit;" >&2
+        echo "  for http you'll need to wire systemd yourself. See ADR-0012." >&2
+        ;;
+    *) echo "error: --transport must be 'unix', 'http' (deprecated), or 'stdio'; got '$TRANSPORT'" >&2; exit 2 ;;
 esac
 
 # Run from repo root regardless of caller's cwd.
@@ -99,7 +107,7 @@ command -v update-desktop-database >/dev/null 2>&1 \
 command -v kbuildsycoca6 >/dev/null 2>&1 \
     && kbuildsycoca6 --noincremental >/dev/null 2>&1 || true
 
-if [[ "$TRANSPORT" == "daemon" ]]; then
+if [[ "$TRANSPORT" == "unix" ]]; then
     echo "==> installing systemd-user units (ADR-0012)"
     SYSTEMD_DIR="$HOME/.config/systemd/user"
     install -D -m 0644 packaging/kde-mcp.socket  "$SYSTEMD_DIR/kde-mcp.socket"
@@ -108,11 +116,14 @@ if [[ "$TRANSPORT" == "daemon" ]]; then
     # Stop any prior running unit so the new binary is picked up cleanly.
     systemctl --user stop kde-mcp.service 2>/dev/null || true
     systemctl --user enable --now kde-mcp.socket
-    # Force-spawn the service to mint the token before claude mcp add.
+    SOCKET_PATH="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/kde-mcp/mcp.sock"
+    # Force-spawn the service so the socket file is bound and visible.
     for _ in 1 2 3 4 5; do
-        if curl -fsS http://127.0.0.1:7575/healthz >/dev/null 2>&1; then
+        if [[ -S "$SOCKET_PATH" ]]; then
             break
         fi
+        # Trigger socket activation with a tiny dummy connect attempt.
+        timeout 1 bash -c "exec 3<>/dev/tcp/127.0.0.1/0 2>/dev/null" 2>/dev/null
         sleep 0.5
     done
 fi
@@ -120,17 +131,23 @@ fi
 if [[ $SKIP_MCP -eq 0 ]]; then
     echo "==> registering kde-mcp at user scope (transport=$TRANSPORT)"
     claude mcp remove --scope user kde-mcp >/dev/null 2>&1 || true
-    if [[ "$TRANSPORT" == "daemon" ]]; then
+    case "$TRANSPORT" in
+      unix)
+        SOCKET_PATH="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/kde-mcp/mcp.sock"
+        claude mcp add --transport http --scope user kde-mcp "unix://${SOCKET_PATH}"
+        ;;
+      http)
         TOKEN_FILE="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/kde-mcp/token"
         if [[ ! -f "$TOKEN_FILE" ]]; then
-            echo "error: daemon token file missing at $TOKEN_FILE" >&2
-            echo "  (the daemon may not have started — check 'journalctl --user -u kde-mcp.service')" >&2
+            echo "warning: HTTP token file missing at $TOKEN_FILE — start the daemon" >&2
+            echo "  manually with --transport=http to mint it, then re-run install." >&2
             exit 1
         fi
         TOKEN="$(cat "$TOKEN_FILE")"
         claude mcp add --transport http --scope user kde-mcp http://127.0.0.1:7575/mcp \
             --header "Authorization: Bearer $TOKEN"
-    else
+        ;;
+      stdio)
         register_stdio() {
             local name="$1"; shift
             claude mcp remove --scope user "$name" >/dev/null 2>&1 || true
@@ -141,7 +158,8 @@ if [[ $SKIP_MCP -eq 0 ]]; then
             echo "==> registering kde-mcp-virtual at user scope"
             register_stdio "kde-mcp-virtual" --mode=virtual --vnc=5910
         fi
-    fi
+        ;;
+    esac
 fi
 
 if [[ $SKIP_ALLOWLIST -eq 0 ]]; then
@@ -194,13 +212,24 @@ fi
 
 echo
 case "$TRANSPORT" in
-    daemon)
-        cat <<'NOTE'
-Done — daemon mode (ADR-0012).
-  Verify:  curl -fsS http://127.0.0.1:7575/healthz
+    unix)
+        SOCKET_PATH="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/kde-mcp/mcp.sock"
+        cat <<NOTE
+Done — daemon mode, Unix socket (ADR-0012).
+  Socket:  $SOCKET_PATH
+  Verify:  curl -fsS --unix-socket "$SOCKET_PATH" http://localhost/healthz
   Logs:    journalctl --user -u kde-mcp.service -f
   Status:  systemctl --user status kde-mcp.service kde-mcp.socket
   Stop:    systemctl --user stop kde-mcp.socket
+Open a fresh Claude Code session to pick up the new MCP entry.
+NOTE
+        ;;
+    http)
+        cat <<'NOTE'
+Done — daemon mode, TCP (deprecated).
+  Verify:  curl -fsS http://127.0.0.1:7575/healthz
+  No systemd unit ships for http — run the daemon manually:
+    kde-mcp --mode=live --transport=http
 Open a fresh Claude Code session to pick up the new MCP entry.
 NOTE
         ;;

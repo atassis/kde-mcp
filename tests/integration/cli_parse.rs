@@ -56,9 +56,15 @@ fn transport_defaults_to_stdio_when_omitted() {
 }
 
 #[test]
-fn transport_daemon_accepted() {
-    let cli = Cli::try_parse_from(["kde-mcp", "--mode=live", "--transport=daemon"]).unwrap();
-    assert_eq!(cli.transport, Transport::Daemon);
+fn transport_http_accepted() {
+    let cli = Cli::try_parse_from(["kde-mcp", "--mode=live", "--transport=http"]).unwrap();
+    assert_eq!(cli.transport, Transport::Http);
+}
+
+#[test]
+fn transport_unix_accepted() {
+    let cli = Cli::try_parse_from(["kde-mcp", "--mode=live", "--transport=unix"]).unwrap();
+    assert_eq!(cli.transport, Transport::Unix);
 }
 
 #[test]
@@ -76,5 +82,6 @@ fn transport_rejects_unknown() {
 #[test]
 fn transport_as_str_matches_lowercase_variant_names() {
     assert_eq!(Transport::Stdio.as_str(), "stdio");
-    assert_eq!(Transport::Daemon.as_str(), "daemon");
+    assert_eq!(Transport::Http.as_str(), "http");
+    assert_eq!(Transport::Unix.as_str(), "unix");
 }

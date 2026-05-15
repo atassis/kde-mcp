@@ -1,12 +1,26 @@
-//! Daemon (HTTP) MCP transport — singleton per user (ADR-0012).
+//! Daemon MCP transport — singleton per user (ADR-0012, amended
+//! 2026-05-16 to add three peer transports).
 //!
-//! Phases 2-6: axum server, `/healthz`, rmcp at `/mcp`, bearer auth,
-//! per-session attribution, idle-stop watchdog, SIGTERM drain, lifecycle
-//! audit events.
+//! Two listener types in production:
 //!
-//! The listening fd is preferentially picked up from systemd via
-//! `LISTEN_FDS` (see `pick_listener`); falls back to binding
-//! `127.0.0.1:7575` directly for dev / non-systemd runs.
+//!   - **Unix socket** (default) — `$XDG_RUNTIME_DIR/kde-mcp/mcp.sock`,
+//!     mode 0600. No bearer auth: filesystem permissions on the
+//!     parent dir (`XDG_RUNTIME_DIR` is 0700 per-user) plus the
+//!     socket mode mean only the owning UID can connect. Same-UID
+//!     processes are inside the threat model already — they could
+//!     drive libei directly without going through kde-mcp.
+//!   - **TCP loopback** (deprecated) — `127.0.0.1:7575`, bearer-token
+//!     auth from `$XDG_RUNTIME_DIR/kde-mcp/token`. Kept for non-
+//!     systemd / non-Wayland deployments and for tunnel-bridge tools.
+//!     Note: clients that respect `HTTPS_PROXY` for loopback URLs
+//!     (Claude Code's HTTP MCP client, in particular) will route the
+//!     request through the proxy and never reach us. Prefer
+//!     `--transport=unix` on KDE-Plasma-Wayland.
+//!
+//! Both listener types pick up an fd from systemd via `LISTEN_FDS`
+//! when present; fall back to direct bind for dev / non-systemd runs.
+//! The router and lifecycle logic is identical — only the listener
+//! type differs.
 
 use crate::server::KdeMcp;
 use crate::transport::session::{SessionRegistry, SessionScope};
@@ -17,16 +31,28 @@ use rmcp::transport::streamable_http_server::{
     StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
 };
 use serde_json::json;
+use std::os::unix::fs::PermissionsExt;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
-use tokio::net::TcpListener;
+use tokio::net::{TcpListener, UnixListener};
 use tokio_util::sync::CancellationToken;
 
 /// Production idle timeout: stop the daemon after 10 minutes of zero
 /// active connections. systemd's `kde-mcp.socket` remains bound, so the
 /// next request transparently re-activates the service.
 pub const IDLE_TIMEOUT: Duration = Duration::from_secs(600);
+
+/// Default unix-socket path. Resolves to `/run/user/<uid>/kde-mcp/mcp.sock`
+/// in normal Plasma sessions. `$XDG_RUNTIME_DIR` is tmpfs-backed,
+/// per-user, mode 0700 — the socket inherits that confinement.
+pub fn default_socket_path() -> PathBuf {
+    if let Some(d) = std::env::var_os("XDG_RUNTIME_DIR") {
+        return PathBuf::from(d).join("kde-mcp/mcp.sock");
+    }
+    PathBuf::from("/tmp/kde-mcp.sock")
+}
 
 /// Shared state passed to the `/healthz` handler.
 #[derive(Clone)]
@@ -35,37 +61,67 @@ struct HealthState {
     sessions: Arc<AtomicU64>,
 }
 
-pub async fn serve(server: KdeMcp) -> Result<()> {
-    let listener = pick_listener().await?;
+/// Public entry: Unix-domain socket listener.
+///
+/// Picks up `LISTEN_FDS[0]` if systemd handed us a Unix socket; falls
+/// back to binding `default_socket_path()` directly. No bearer auth —
+/// filesystem permissions on `$XDG_RUNTIME_DIR/kde-mcp/` (0700) and
+/// the socket itself (0600) replace it.
+pub async fn serve_unix(server: KdeMcp) -> Result<()> {
+    let listener = pick_unix_listener().await?;
+    serve_with_listener_token_timeout(server, listener, None, IDLE_TIMEOUT).await
+}
+
+/// Public entry: TCP `127.0.0.1:7575` listener with bearer-token auth.
+///
+/// **Deprecated** for desktop use. Picks up `LISTEN_FDS[0]` if systemd
+/// handed us a TCP socket; falls back to direct bind. Reads (or
+/// generates) the bearer token at `$XDG_RUNTIME_DIR/kde-mcp/token`.
+pub async fn serve_http(server: KdeMcp) -> Result<()> {
+    let listener = pick_tcp_listener().await?;
     let token_path = crate::transport::auth::default_token_path();
     let token = crate::transport::auth::ensure_token(&token_path)
         .with_context(|| format!("ensure_token at {}", token_path.display()))?;
     tracing::info!(token_path = %token_path.display(), "daemon: bearer token ready");
-    serve_with_listener_and_timeout(server, listener, Some(token), IDLE_TIMEOUT).await
+    serve_with_listener_token_timeout(server, listener, Some(token), IDLE_TIMEOUT).await
 }
 
-/// Convenience for tests: no auth, default idle timeout.
-pub async fn serve_with_listener(server: KdeMcp, listener: TcpListener) -> Result<()> {
-    serve_with_listener_and_timeout(server, listener, None, IDLE_TIMEOUT).await
+/// Convenience for tests with default idle timeout. The listener is
+/// generic so test code can pass a `TcpListener` for tooling ergonomics.
+pub async fn serve_with_listener<L>(server: KdeMcp, listener: L) -> Result<()>
+where
+    L: axum::serve::Listener + Send + 'static,
+    L::Addr: std::fmt::Debug + Send,
+{
+    serve_with_listener_and_timeout(server, listener, IDLE_TIMEOUT).await
 }
 
-/// Convenience for tests: token-aware, default idle timeout.
-pub async fn serve_with_listener_and_token(
+pub async fn serve_with_listener_and_timeout<L>(
     server: KdeMcp,
-    listener: TcpListener,
-    token: Option<String>,
-) -> Result<()> {
-    serve_with_listener_and_timeout(server, listener, token, IDLE_TIMEOUT).await
+    listener: L,
+    idle: Duration,
+) -> Result<()>
+where
+    L: axum::serve::Listener + Send + 'static,
+    L::Addr: std::fmt::Debug + Send,
+{
+    serve_with_listener_token_timeout(server, listener, None, idle).await
 }
 
-pub async fn serve_with_listener_and_timeout(
+/// Common path. `token` is `Some(...)` for the HTTP transport (gates
+/// `/mcp` with `Authorization: Bearer <token>`), `None` for Unix-socket
+/// and test scenarios.
+async fn serve_with_listener_token_timeout<L>(
     server: KdeMcp,
-    listener: TcpListener,
+    listener: L,
     token: Option<String>,
     idle: Duration,
-) -> Result<()> {
+) -> Result<()>
+where
+    L: axum::serve::Listener + Send + 'static,
+    L::Addr: std::fmt::Debug + Send,
+{
     use crate::transport::auth::{AuthState, bearer_middleware};
-
     // --- shared state -------------------------------------------------------
     let sessions = Arc::new(AtomicU64::new(0));
     let started_at = Instant::now();
@@ -143,7 +199,6 @@ pub async fn serve_with_listener_and_timeout(
     } else {
         mcp_router
     };
-
     let app = healthz_router.merge(mcp_router);
 
     // --- shutdown wiring ----------------------------------------------------
@@ -219,11 +274,29 @@ async fn healthz(State(state): State<HealthState>) -> Json<serde_json::Value> {
     }))
 }
 
-/// Returns a listener — preferring systemd's inherited fd if available,
-/// falling back to a fresh bind on `127.0.0.1:7575`. systemd sets
-/// `LISTEN_FDS` and `LISTEN_PID` before exec; `listenfd` reads those and
-/// hands us back the already-bound fd.
-async fn pick_listener() -> Result<TcpListener> {
+/// Returns a `UnixListener`. Prefers systemd's inherited fd when
+/// `LISTEN_FDS` is set; falls back to binding `default_socket_path()`.
+async fn pick_unix_listener() -> Result<UnixListener> {
+    let mut lf = listenfd::ListenFd::from_env();
+    if let Some(std_listener) = lf
+        .take_unix_listener(0)
+        .context("listenfd::take_unix_listener")?
+    {
+        std_listener
+            .set_nonblocking(true)
+            .context("set_nonblocking on inherited fd")?;
+        return UnixListener::from_std(std_listener).context("UnixListener::from_std");
+    }
+    let path = default_socket_path();
+    bind_unix_socket(&path)
+        .await
+        .with_context(|| format!("bind unix socket at {}", path.display()))
+}
+
+/// Returns a `TcpListener` on `127.0.0.1:7575`. Prefers systemd's
+/// inherited fd; falls back to direct bind. Used by the deprecated
+/// HTTP transport.
+async fn pick_tcp_listener() -> Result<TcpListener> {
     let mut lf = listenfd::ListenFd::from_env();
     if let Some(std_listener) = lf
         .take_tcp_listener(0)
@@ -237,4 +310,21 @@ async fn pick_listener() -> Result<TcpListener> {
     TcpListener::bind("127.0.0.1:7575")
         .await
         .context("bind 127.0.0.1:7575")
+}
+
+/// Bind a fresh Unix-domain socket at `path`, creating the parent dir
+/// if needed and chmod'ing the socket to 0600. Idempotent — unlinks
+/// any stale socket file left over from a previous crash.
+pub(crate) async fn bind_unix_socket(path: &Path) -> Result<UnixListener> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("create_dir_all {}", parent.display()))?;
+    }
+    // Stale socket file from a previous run blocks the bind; unlink it.
+    let _ = std::fs::remove_file(path);
+    let listener = UnixListener::bind(path)
+        .with_context(|| format!("UnixListener::bind {}", path.display()))?;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+        .with_context(|| format!("chmod 0600 {}", path.display()))?;
+    Ok(listener)
 }

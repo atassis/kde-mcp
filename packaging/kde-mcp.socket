@@ -1,12 +1,14 @@
 [Unit]
-Description=kde-mcp daemon socket (ADR-0012)
+Description=kde-mcp daemon Unix socket (ADR-0012)
 PartOf=kde-mcp.service
 
 [Socket]
-ListenStream=127.0.0.1:7575
-NoDelay=true
-# Single accept loop in the daemon. Each request is dispatched on its own
-# tokio task inside the process; we never want systemd to fork-per-connection.
+# %t expands to $XDG_RUNTIME_DIR (typically /run/user/<uid>) for user units.
+ListenStream=%t/kde-mcp/mcp.sock
+# Only the owning UID can open the socket.
+SocketMode=0600
+# Single accept loop in the daemon — each request runs on its own
+# tokio task inside the process.
 Accept=false
 
 [Install]
