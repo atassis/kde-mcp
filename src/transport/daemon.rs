@@ -11,22 +11,22 @@
 use crate::server::KdeMcp;
 use anyhow::{Context, Result};
 use axum::{Json, Router, extract::State, routing::get};
+use rmcp::transport::streamable_http_server::{
+    StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
+};
 use serde_json::json;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 use tokio::net::TcpListener;
 
-/// Shared state passed to axum handlers. `server` is the underlying
-/// `KdeMcp` (cloned cheaply via `Arc`-backed fields); `started_at` powers
-/// `uptime_s`; `sessions` counts open MCP sessions and is populated in
-/// Phase 5 — for Phase 2 it stays at 0.
+/// Shared state passed to the `/healthz` axum handler. `started_at`
+/// powers `uptime_s`; `sessions` is bumped by the rmcp factory closure
+/// each time a new client session opens, and decremented when it closes.
 #[derive(Clone)]
-struct DaemonState {
+struct HealthState {
     started_at: Instant,
     sessions: Arc<AtomicU64>,
-    #[allow(dead_code)] // wired in Phase 3 when rmcp mounts at /mcp
-    server: KdeMcp,
 }
 
 pub async fn serve(server: KdeMcp) -> Result<()> {
@@ -35,14 +35,32 @@ pub async fn serve(server: KdeMcp) -> Result<()> {
 }
 
 pub async fn serve_with_listener(server: KdeMcp, listener: TcpListener) -> Result<()> {
-    let state = DaemonState {
-        started_at: Instant::now(),
-        sessions: Arc::new(AtomicU64::new(0)),
-        server,
-    };
+    let sessions = Arc::new(AtomicU64::new(0));
+    let started_at = Instant::now();
+
+    // Each new MCP session gets a fresh clone of `KdeMcp`. KdeMcp's fields
+    // are already `Arc`-backed so cloning is cheap; Phase 5 will use this
+    // closure point to also mint a per-session SessionId + cancel token.
+    let server_for_factory = server.clone();
+    let sessions_for_factory = sessions.clone();
+    let mcp_service = StreamableHttpService::new(
+        move || {
+            sessions_for_factory.fetch_add(1, Ordering::Relaxed);
+            // TODO(phase 5): set session_id on the clone before returning.
+            Ok(server_for_factory.clone())
+        },
+        Arc::new(LocalSessionManager::default()),
+        StreamableHttpServerConfig::default(),
+    );
+
     let app = Router::new()
         .route("/healthz", get(healthz))
-        .with_state(state);
+        .route_service("/mcp", mcp_service)
+        .with_state(HealthState {
+            started_at,
+            sessions,
+        });
+
     if let Ok(addr) = listener.local_addr() {
         tracing::info!(?addr, "daemon listening");
     }
@@ -52,7 +70,7 @@ pub async fn serve_with_listener(server: KdeMcp, listener: TcpListener) -> Resul
     Ok(())
 }
 
-async fn healthz(State(state): State<DaemonState>) -> Json<serde_json::Value> {
+async fn healthz(State(state): State<HealthState>) -> Json<serde_json::Value> {
     Json(json!({
         "ok": true,
         "uptime_s": state.started_at.elapsed().as_secs(),
