@@ -8,6 +8,7 @@ mod integration {
     pub mod cli_parse;
     pub mod clipboard_offline;
     pub mod keymap;
+    pub mod lease;
     pub mod lockfile;
     pub mod observe_offline;
     pub mod text_editor;
