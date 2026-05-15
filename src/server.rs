@@ -610,6 +610,11 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    /// Serialise tests that mutate process-wide env vars (XDG_RUNTIME_DIR
+    /// for the lease's tempdir setup).
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     async fn fresh_audit() -> (tempfile::TempDir, Arc<AuditLog>) {
         let dir = tempfile::tempdir().unwrap();
@@ -618,8 +623,10 @@ mod tests {
         (dir, audit)
     }
 
+    #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn dispatch_audited_writes_a_record_on_success() {
+        let _env = ENV_LOCK.lock().unwrap();
         let (_dir, audit) = fresh_audit().await;
         let path = _dir.path().join("a.jsonl");
         let xdg = tempfile::tempdir().unwrap();
@@ -653,8 +660,10 @@ mod tests {
         assert!(v["duration_ms"].is_number());
     }
 
+    #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn dispatch_audited_writes_a_record_on_error() {
+        let _env = ENV_LOCK.lock().unwrap();
         let (_dir, audit) = fresh_audit().await;
         let path = _dir.path().join("a.jsonl");
         let xdg = tempfile::tempdir().unwrap();
@@ -692,5 +701,68 @@ mod tests {
             !v.to_string().contains("\"secret\""),
             "secret leaked into audit"
         );
+    }
+
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test]
+    async fn dispatch_audited_busy_path_writes_audit_and_returns_error() {
+        let _env = ENV_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        unsafe { std::env::set_var("XDG_RUNTIME_DIR", dir.path()) };
+        let (_audit_dir, audit) = fresh_audit().await;
+
+        // Pre-write a lease record pointing at PID 1 (init, always alive),
+        // so the dispatch_audited Mutate path will time out and return Busy.
+        let lease_file = crate::lease::lease_path();
+        std::fs::create_dir_all(lease_file.parent().unwrap()).unwrap();
+        let blocker = crate::lease::LeaseRecord {
+            holder_pid: 1,
+            holder_session_id: "alien".into(),
+            holder_intent: "keyboard.type".into(),
+            acquired_at: chrono::Utc::now(),
+            last_refresh_at: chrono::Utc::now(),
+            expires_at: chrono::Utc::now() + chrono::Duration::seconds(30),
+        };
+        std::fs::write(&lease_file, serde_json::to_string(&blocker).unwrap()).unwrap();
+
+        // Build a LeaseStore for "us" (different PID — u32::MAX) with a
+        // short acquire_timeout so the test runs quickly.
+        let cfg = crate::lease::LeaseConfig {
+            idle_timeout: std::time::Duration::from_secs(10),
+            acquire_timeout: std::time::Duration::from_millis(250),
+        };
+        let lease = std::sync::Arc::new(crate::lease::LeaseStore::new(
+            cfg,
+            u32::MAX,
+            "us".into(),
+        ));
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let tray = crate::tray::TrayState::new(cancel);
+        let path = _audit_dir.path().join("a.jsonl");
+        let r = dispatch_audited(
+            audit.clone(),
+            tray,
+            lease,
+            crate::lease::ToolKind::Mutate,
+            "live",
+            "keyboard.type",
+            serde_json::json!({"text": "irrelevant"}),
+            async {
+                // This future should NOT run — the lease should reject
+                // before we get here.
+                panic!("future ran despite Busy");
+                #[allow(unreachable_code)]
+                Ok::<_, ToolError>(serde_json::Value::Null)
+            },
+        )
+        .await;
+        assert_eq!(r.is_error, Some(true));
+        // Drop the audit log so the write is flushed.
+        drop(audit);
+        let body = tokio::fs::read_to_string(&path).await.unwrap();
+        let v: serde_json::Value = serde_json::from_str(body.trim()).unwrap();
+        assert_eq!(v["tool"], "keyboard.type");
+        assert_eq!(v["ok"], false);
+        assert_eq!(v["error"]["code"], "busy");
     }
 }

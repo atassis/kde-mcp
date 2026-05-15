@@ -202,6 +202,7 @@ fn release_if_holder_removes_lease_file() {
     assert!(!path.exists(), "lease file should be deleted on release");
 }
 
+#[allow(clippy::await_holding_lock)]
 #[tokio::test]
 async fn acquire_returns_busy_after_short_timeout_when_held() {
     let _guard = ENV_LOCK.lock().unwrap();
@@ -246,6 +247,7 @@ async fn acquire_returns_busy_after_short_timeout_when_held() {
     }
 }
 
+#[allow(clippy::await_holding_lock)]
 #[tokio::test]
 async fn acquire_returns_immediately_when_no_holder() {
     let _guard = ENV_LOCK.lock().unwrap();

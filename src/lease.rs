@@ -198,12 +198,18 @@ impl LeaseStore {
         let is_ours = serde_json::from_str::<LeaseRecord>(&body)
             .map(|r| r.holder_pid == self.self_pid)
             .unwrap_or(false);
-        // Drop the guard before unlinking.
-        drop(guard);
         if is_ours {
-            // Best-effort: ignore ENOENT if another process raced us.
-            let _ = std::fs::remove_file(&path);
+            // Unlink while still holding the flock. Other processes waiting
+            // on lock.write() will reopen the (recreated) file and flock the
+            // new inode, so they will not see this stale record.
+            match std::fs::remove_file(&path) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => return Err(e),
+            }
         }
+        // Guard drops here, after the unlink.
+        drop(guard);
         Ok(())
     }
 }
