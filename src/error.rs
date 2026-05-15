@@ -36,8 +36,14 @@ pub enum ToolError {
     #[error("cancelled at {cancelled_at_stage}")]
     Cancelled { cancelled_at_stage: String },
 
-    #[error("lock unavailable; held by pid {holder_pid}")]
-    LockUnavailable { holder_pid: u32, lock_path: String },
+    #[error("busy; held by pid {holder_pid} running {holder_intent}")]
+    Busy {
+        holder_pid: u32,
+        holder_intent: String,
+        lease_expires_in_ms: u64,
+        waited_ms: u64,
+        acquire_timeout_ms: u64,
+    },
 
     #[error("timeout")]
     Timeout {
@@ -78,7 +84,7 @@ impl ToolError {
             Self::TierRestricted { .. } => "tier_restricted",
             Self::AppApprovalRequired { .. } => "app_approval_required",
             Self::Cancelled { .. } => "cancelled",
-            Self::LockUnavailable { .. } => "lock_unavailable",
+            Self::Busy { .. } => "busy",
             Self::Timeout { .. } => "timeout",
             Self::InputDispatchFailed { .. } => "input_dispatch_failed",
             Self::ExternalCommandFailed { .. } => "external_command_failed",
@@ -139,9 +145,12 @@ mod tests {
                 cancelled_at_stage: "x".into(),
             }
             .code(),
-            ToolError::LockUnavailable {
+            ToolError::Busy {
                 holder_pid: 1,
-                lock_path: "/x".into(),
+                holder_intent: "keyboard.type".into(),
+                lease_expires_in_ms: 0,
+                waited_ms: 0,
+                acquire_timeout_ms: 0,
             }
             .code(),
             ToolError::Timeout {
@@ -177,12 +186,15 @@ mod tests {
     fn codes_match_spec_section_8_table() {
         assert_eq!(ToolError::NotImplemented.code(), "not_implemented");
         assert_eq!(
-            ToolError::LockUnavailable {
+            ToolError::Busy {
                 holder_pid: 0,
-                lock_path: "/x".into()
+                holder_intent: "wait".into(),
+                lease_expires_in_ms: 0,
+                waited_ms: 0,
+                acquire_timeout_ms: 0,
             }
             .code(),
-            "lock_unavailable"
+            "busy"
         );
         assert_eq!(
             ToolError::Cancelled {
