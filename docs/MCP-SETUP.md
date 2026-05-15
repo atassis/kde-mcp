@@ -82,7 +82,7 @@ If the binary path ever moves (e.g. you switch to `/usr/local/bin/`), re-templat
 
 ## Operational gotchas
 
-1. **One-session-at-a-time.** The live-mode lockfile (`$XDG_RUNTIME_DIR/kde-mcp/live.lock`) means only one Claude Code session can hold kde-mcp at any moment. A second concurrent session will see the server fail to start with `lock_unavailable, holder_pid=...`. Tools from that second session will be unavailable until the first releases. Not a bug — by ADR-0003 (mode-per-process).
+1. **Multi-session coexistence with workflow-level lease.** Multiple Claude Code sessions can run kde-mcp concurrently (per ADR-0011). Mutating tool calls serialize via `$XDG_RUNTIME_DIR/kde-mcp/lease.json`: the first mutation acquires the lease for ~10s of idle, and other sessions' mutations block (returning `busy { holder_pid, holder_intent, lease_expires_in_ms }` after `acquire_timeout`, default 60s). Observation tools never block. Idle sessions cost nothing.
 
 2. **First destructive call against any app triggers a KDE notification.** kde-mcp's policy gate prompts via `org.freedesktop.Notifications` with Allow once / Allow this session / Deny. "Allow this session" persists to `~/.local/state/kde-mcp/approvals.json`. Until the user clicks, the gate returns `app_approval_required`.
 

@@ -17,7 +17,8 @@ Format: 1-2 pages each. Sections: Status · Context · Decision · Consequences 
 | 0007 | Adopt Anthropic computer-use safety architecture (policy gate) | Accepted |
 | 0008 | Visual prompt injection defence is host-side, not server-side  | Accepted |
 | 0009 | Phase 3–6 implementation shape (per-call EIS, SIGUSR1 cancel, …) | Accepted (§2 superseded by 0010) |
-| 0010 | Cancel UX: system tray + Meta+Esc hotkey + dispatch hooks | Accepted |
+| 0010 | Cancel UX: system tray + Meta+Esc hotkey + dispatch hooks | Accepted (Meta+Esc handoff amended by 0011) |
+| 0011 | Multi-session coexistence via per-session mutation lease | Accepted |
 
 ## When to add an ADR
 

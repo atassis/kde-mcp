@@ -136,7 +136,7 @@ Matching priority: top-to-bottom; first match wins.
 |---|---|---|---|---|
 | F1 | `binary not found at .*kde-mcp` OR `No such file or directory: .*\.local/bin/kde-mcp` | `./packaging/install.sh --skip-mcp` | yes | Rebuilds + re-installs the binary. Skips Claude config so we don't loop the install. |
 | F2 | `not_authorized.*ScreenShot2` | `kbuildsycoca6 --noincremental` | yes | KApplicationTrader cache stale. Rebuild it; KWin will re-authorize on next call. |
-| F3 | `lock_unavailable` | (none) | no | Another Claude Code session holds the live lockfile. **Abort the run** — the executing agent cannot proceed. Log the holding PID from the error response. |
+| F3 | `busy` | (none) | yes | Another Claude Code session holds the mutation lease (ADR-0011). **Log and retry the dependent step once** — the leaseholder's burst is usually short. Persistent `busy` is logged + the step is marked failed. |
 | F4 | `wl-paste: command not found` OR `wl-copy: command not found` | (none) | no | wl-clipboard not installed. Skip all S4 (clipboard transport) steps + L2 clipboard_read/clipboard_write. Log dep-missing. |
 | F5 | `tesseract.*not found` OR `external_command_failed.*tesseract` | (none) | no | OCR backend missing. Skip S3. |
 | F6 | `external_command_failed.*magick` OR `magick: command not found` | (none) | no | ImageMagick missing. Cannot generate S3 fixture. Skip S3. |

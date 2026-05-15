@@ -149,14 +149,16 @@ echo "exit=$?"
 
 - **KDE notifications** "Claude is using your computer" and "Claude finished using your computer" should appear on screen during the run. This is visual; automate only if KDE's notification daemon supports query-the-history (out of scope).
 
-- **Concurrent-launch contention** — start two `--mode=live` instances; the second should fail with `lock_unavailable`:
+- **Concurrent-launch coexistence** — start two `--mode=live` instances; both should start successfully. Mutating tool calls from session B should block (returning `busy` after `acquire_timeout` if A holds for longer than the timeout):
 
   ```sh
   target/release/kde-mcp --mode=live &
   sleep 0.3
-  target/release/kde-mcp --mode=live   # expect: Error: lock unavailable; held by pid N
-  kill %1
-  wait %1 2>/dev/null || true
+  target/release/kde-mcp --mode=live &   # expect: starts; both processes running
+  sleep 0.3
+  ls -la "$XDG_RUNTIME_DIR/kde-mcp/lease.json" 2>/dev/null || echo "(lease appears only when a mutating tool is in flight)"
+  kill %1 %2 2>/dev/null
+  wait %1 %2 2>/dev/null || true
   ```
 
 ### A.4 What pass means
@@ -166,7 +168,7 @@ If A.1–A.3 succeed, the binary:
 - speaks MCP 2025-11-25 correctly,
 - advertises the right tool surface with the right schemas and hints,
 - maps `ToolError::NotImplemented` to a structured `{code, details}` payload the model can parse,
-- holds the per-mode lockfile, writes the holder PID, releases on exit,
+- starts cleanly with no startup lock (per ADR-0011); mutation lease is per-call, opened on demand,
 - opens the audit log path and creates parent directories,
 - fires the acquire / release notifications.
 

@@ -261,7 +261,7 @@ JSON-RPC protocol errors are reserved for malformed arguments only.
 
 Every destructive tool call passes through a shared policy gate before any side effect is dispatched. The gate is implemented once (in `src/policy.rs`) and wraps each destructive handler:
 
-1. **Mode lock check** — the process must hold its mode's lock (`$XDG_RUNTIME_DIR/kde-mcp/live.lock` or `virtual.lock`). Acquired at startup, released at exit. Stale-lock detection via PID liveness. Failure → `lock_unavailable`.
+1. **Lease acquisition** — if the tool is mutating (per ADR-0011's classification table), the process must acquire-or-refresh the lease at `$XDG_RUNTIME_DIR/kde-mcp/lease.json`. Acquire blocks up to `acquire_timeout` (default 60s) polling at 100ms. Failure → `busy { holder_pid, holder_intent, lease_expires_in_ms, waited_ms, acquire_timeout_ms }`. Observing tools refresh the lease only when the caller already holds it; they never block.
 2. **Cancellation check** — if the global-shortcut-driven `CancellationToken` is set (user pressed `Meta+Esc`), abort immediately. Failure → `cancelled`. Token is rechecked between every libei event, every OCR page, every D-Bus call so long-running tools surrender quickly.
 3. **Target-app resolution** — derives the target app class from tool args:
    - `act_on_element` / `window_control` → from the ref's owning window
@@ -669,7 +669,7 @@ Every error returns `{ isError: true, structuredContent: { code, ...details } }`
 | `tier_restricted` | target app's tier disallows this action (§6.0 step 4) | `app_class`, `current_tier`, `allowed_actions` |
 | `app_approval_required` | target app not yet approved this session (§6.0 step 5) | `app_class`, `notification_id`, `still_pending?` |
 | `cancelled` | user invoked the cancel shortcut (`Meta+Esc`) | `cancelled_at_stage` |
-| `lock_unavailable` | another `kde-mcp` of this mode already holds the lock | `holder_pid`, `lock_path` |
+| `busy` | another `kde-mcp` session currently holds the mutation lease (ADR-0011) | `holder_pid`, `holder_intent`, `lease_expires_in_ms`, `waited_ms`, `acquire_timeout_ms` |
 | `timeout` | `wait` deadline | `closest_match`, `current_windows` |
 | `input_dispatch_failed` | libei call errored | retried once internally; if surfaced, `libei_version`, `kwin_version` in details |
 | `external_command_failed` | tesseract/wl-copy/etc. nonzero exit | `stderr` |
@@ -708,7 +708,7 @@ Eight layers:
 
 1. **Honest tool annotations.** `readOnlyHint: true` on the 8 observation tools; `destructiveHint: true` on the 7 mutating tools. `openWorldHint: true` on `bash`. Hosts use these to decide which to auto-allow vs. prompt.
 2. **Audit log always on.** Local JSONL; `tail -f` for live review. Every gate decision (approval grant, tier rejection, cancellation) is also logged.
-3. **Single-session lock per mode.** `$XDG_RUNTIME_DIR/kde-mcp/<mode>.lock` (POSIX flock). Two `kde-mcp --mode=live` cannot run simultaneously; two `--mode=virtual` cannot either; one of each is allowed. Lock acquired at startup, released on exit. Stale-lock detection via PID liveness check. Notifications via `org.freedesktop.Notifications` on acquire ("Claude is using your computer · press Meta+Esc to stop") and release ("Claude finished using your computer").
+3. **Per-session mutation lease.** `$XDG_RUNTIME_DIR/kde-mcp/lease.json` (POSIX flock on read/write). Multiple `kde-mcp --mode=live` may run concurrently — one per Claude Code session. Mutating tool calls serialize via the lease (acquire on dispatch, refresh on each subsequent call by the same holder, auto-expire after `idle_timeout` of inactivity, release on process exit / cancel). Observation calls are never blocked. Stale holders detected via `kill -0`. Notifications via `org.freedesktop.Notifications` on first acquire ("Claude is using your computer · press Meta+Esc to stop") and on clean shutdown ("Claude finished using your computer"). See `docs/adr/0011-multi-session-lease.md`.
 4. **Per-app approval per session** (gate step 5). First destructive tool against a not-yet-approved app returns `app_approval_required` and fires a notification with `Allow once` / `Allow this session` / `Deny` action buttons. State is in-memory, lost on process restart.
 5. **App-category tiering** (gate step 4). `view_only` (browsers): destructive tools blocked. `click_only` (terminals, IDEs): typing blocked, click/navigation allowed. `full`: default. Table at `~/.config/kde-mcp/policy.toml`, user-overridable. Tier rejection returns `tier_restricted`.
 6. **Sentinel warnings** (gate step 6). When a destructive action targets an app marked with a sentinel (`shell_access`, `filesystem_access`, `system_settings`), the response carries `warnings: [...]`. Non-blocking; informational for both the model and the user.

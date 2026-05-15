@@ -3,9 +3,9 @@
 //! Every destructive tool routes through `PolicyGate::check()` before any
 //! side effect. The gate runs six steps in order:
 //!
-//! 1. **Mode lock** — process holds its mode's lock. Stays asserted via the
-//!    `ModeLock` guard on the server's bootstrap path; the gate just trusts
-//!    the lock is held (re-checking would race the kernel anyway).
+//! 1. **Lease check** — mutating tools acquire the per-session lease at
+//!    dispatch (see `src/lease.rs` / ADR-0011). The gate itself does not
+//!    re-check; the acquire happens upstream in `dispatch_audited`.
 //! 2. **Cancellation** — checks the shared `CancellationToken`. Set by
 //!    Meta+Esc via `src/cancel.rs`.
 //! 3. **Target-app resolution** — derives the app class from the tool args.
@@ -242,8 +242,8 @@ impl PolicyGate {
     /// Run the gate. Returns either `Ok(warnings)` to proceed (warnings
     /// merge into the tool's response) or `Err(ToolError)` to short-circuit.
     pub async fn check(&self, target: TargetApp, action: Action) -> Result<Vec<String>, ToolError> {
-        // Step 1: mode lock is asserted by the bootstrap path; the gate
-        // does not re-check.
+        // Step 1: lease acquisition happens upstream in `dispatch_audited`; the
+        // gate does not re-check.
 
         // Step 2: cancellation.
         if self.cancel.is_cancelled() {

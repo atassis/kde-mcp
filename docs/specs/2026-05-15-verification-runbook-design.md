@@ -184,7 +184,7 @@ The agent is told to read this template upfront and apply it uniformly. No prose
 |---|---|---|
 | `not_authorized.*ScreenShot2` | `kbuildsycoca6 --noincremental` | yes |
 | `binary not found at \\$BIN` | `./packaging/install.sh --skip-mcp` | yes |
-| `lock_unavailable` | (none — abort run; another session holds the live lock) | no |
+| `busy` | (none — log and retry the dependent step once; persistent `busy` is logged + step marked failed) | yes (once) |
 | `wl-paste: command not found` | (none — skip remaining clipboard steps) | no |
 | `tesseract.*not found` | (none — skip S3) | no |
 | `external_command_failed.*magick` | (none — skip S3 fixture generation) | no |
@@ -203,7 +203,7 @@ A run dir is "in progress" if it has `progress.jsonl` but no `summary.md`.
 
 ### Concurrency
 
-The runbook assumes one verification session at a time. The kde-mcp live lockfile enforces this at the kernel level — if a second session tries to spawn while one's already running, it gets `lock_unavailable` and the runbook aborts (per known-fixes table).
+The runbook still assumes one verification session at a time, but ADR-0011 removed the startup lock that used to enforce this — multiple `kde-mcp --mode=live` instances may now run concurrently. If a parallel session's mutating tool happens to hold the lease while a runbook step fires, the step gets `busy` and is retried once per the F3 entry. Persistent `busy` is treated as a real failure (see the `busy` row in the known-fixes table above).
 
 ## What gets verified vs not
 

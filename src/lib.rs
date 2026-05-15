@@ -5,7 +5,7 @@ pub mod cli;
 pub mod error;
 pub mod keymap;
 pub mod kwin;
-pub mod lock;
+pub mod lease;
 pub mod mode;
 pub mod notify;
 pub mod policy;

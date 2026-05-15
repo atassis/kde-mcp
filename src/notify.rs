@@ -1,8 +1,6 @@
 use notify_rust::{Hint, Notification, Urgency};
 
-/// Acquire-notification fired right after the per-mode lockfile is obtained.
-/// Spec §10 layer 3 ("Claude is using your computer · press Meta+Esc to stop").
-pub async fn notify_lock_acquired(mode: &str) {
+pub async fn notify_lease_acquired(mode: &str) {
     let mode_descriptor = match mode {
         "live" => "your live desktop",
         "virtual" => "a virtual desktop session",
@@ -12,9 +10,7 @@ pub async fn notify_lock_acquired(mode: &str) {
     fire_blocking("Claude is using your computer", body, Urgency::Normal, 5000).await;
 }
 
-/// Release-notification fired right before the binary exits, after the lock
-/// has been released.
-pub async fn notify_lock_released(mode: &str) {
+pub async fn notify_lease_released(mode: &str) {
     let body = format!("kde-mcp finished using {mode} mode.");
     fire_blocking(
         "Claude finished using your computer",
@@ -89,7 +85,7 @@ mod tests {
     // don't bit-rot.
     #[test]
     fn module_compiles_and_exports_two_async_fns() {
-        let _ = super::notify_lock_acquired;
-        let _ = super::notify_lock_released;
+        let _ = super::notify_lease_acquired;
+        let _ = super::notify_lease_released;
     }
 }
