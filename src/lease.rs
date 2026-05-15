@@ -226,6 +226,30 @@ impl From<std::io::Error> for AcquireError {
     }
 }
 
+impl From<AcquireError> for crate::error::ToolError {
+    fn from(e: AcquireError) -> Self {
+        match e {
+            AcquireError::Busy {
+                holder_pid,
+                holder_intent,
+                lease_expires_in_ms,
+                waited_ms,
+                acquire_timeout_ms,
+            } => crate::error::ToolError::Busy {
+                holder_pid,
+                holder_intent,
+                lease_expires_in_ms,
+                waited_ms,
+                acquire_timeout_ms,
+            },
+            AcquireError::Io(e) => crate::error::ToolError::Io {
+                path: lease_path().to_string_lossy().to_string(),
+                error: e.to_string(),
+            },
+        }
+    }
+}
+
 impl LeaseStore {
     /// Async acquire: block (polling at 100ms) until we hold the lease or
     /// `acquire_timeout` elapses. Returns `Busy` on timeout.
@@ -303,5 +327,18 @@ mod tests {
     fn pid_alive_true_for_self_false_for_zero() {
         assert!(pid_alive(std::process::id()));
         assert!(!pid_alive(0));
+    }
+
+    #[test]
+    fn busy_acquire_error_maps_to_busy_tool_error() {
+        let e = AcquireError::Busy {
+            holder_pid: 42,
+            holder_intent: "mouse".into(),
+            lease_expires_in_ms: 1234,
+            waited_ms: 567,
+            acquire_timeout_ms: 60000,
+        };
+        let mapped: crate::error::ToolError = e.into();
+        assert_eq!(mapped.code(), "busy");
     }
 }
