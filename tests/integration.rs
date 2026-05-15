@@ -7,6 +7,7 @@ mod integration {
     pub mod chord_parse;
     pub mod cli_parse;
     pub mod clipboard_offline;
+    pub mod daemon_http;
     pub mod keymap;
     pub mod lease;
     pub mod observe_offline;

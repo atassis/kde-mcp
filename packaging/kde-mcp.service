@@ -1,0 +1,20 @@
+[Unit]
+Description=kde-mcp daemon (HTTP MCP server, ADR-0012)
+Requires=kde-mcp.socket
+After=kde-mcp.socket graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/kde-mcp --mode=live --transport=daemon
+Restart=on-failure
+RestartSec=2
+# Drain in-flight calls on shutdown within this window; the daemon's own
+# graceful-shutdown timeout (Phase 6) is 3s, so this needs to be larger.
+TimeoutStopSec=10
+# Forward stdout/stderr to the systemd journal under the unit name.
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target
