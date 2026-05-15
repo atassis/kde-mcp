@@ -256,6 +256,45 @@ impl LeaseStore {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolKind {
+    Mutate,
+    Observe,
+}
+
+/// Map a tool's wire-name + args to its lease class per ADR-0011.
+pub fn classify_tool(wire_name: &str, args: &serde_json::Value) -> ToolKind {
+    match wire_name {
+        // Observation: never acquires, only refreshes when held.
+        "observe"
+        | "inspect"
+        | "screenshot"
+        | "read_text"
+        | "window_query"
+        | "clipboard_read"
+        | "text_editor.view" => ToolKind::Observe,
+        // Mutation: acquires the lease.
+        "act_on_element"
+        | "mouse"
+        | "keyboard.type"
+        | "keyboard.key"
+        | "window_control"
+        | "clipboard_write"
+        | "text_editor.edit"
+        | "bash" => ToolKind::Mutate,
+        // `wait` is mutation-class iff its condition blocks on screen state.
+        // `condition: "seconds"` is a pure sleep — Observe.
+        "wait" => match args.get("condition").and_then(|v| v.as_str()) {
+            Some("seconds") | None => ToolKind::Observe,
+            Some(_) => ToolKind::Mutate,
+        },
+        // Unknown tools default to Observe — safer to under-lease than to
+        // block on a tool that has no lease semantics. Loud-fail in audit
+        // when this triggers (handled in dispatch_audited).
+        _ => ToolKind::Observe,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -5,7 +5,7 @@
 //! tests that mutate it must serialize via `ENV_LOCK`.
 
 use chrono::{TimeZone, Utc};
-use kde_mcp::lease::{lease_path, AcquireError, LeaseConfig, LeaseRecord, LeaseStore, TryOutcome};
+use kde_mcp::lease::{classify_tool, lease_path, AcquireError, LeaseConfig, LeaseRecord, LeaseStore, ToolKind, TryOutcome};
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -259,4 +259,59 @@ async fn acquire_returns_immediately_when_no_holder() {
     let started = std::time::Instant::now();
     store.acquire("keyboard.type").await.unwrap();
     assert!(started.elapsed() < std::time::Duration::from_millis(50));
+}
+
+#[test]
+fn observe_tools_classified_as_observe() {
+    for name in [
+        "observe",
+        "inspect",
+        "screenshot",
+        "read_text",
+        "window_query",
+        "clipboard_read",
+        "text_editor.view",
+    ] {
+        assert_eq!(
+            classify_tool(name, &serde_json::Value::Null),
+            ToolKind::Observe,
+            "expected {name} to be Observe"
+        );
+    }
+}
+
+#[test]
+fn mutate_tools_classified_as_mutate() {
+    for name in [
+        "act_on_element",
+        "mouse",
+        "keyboard.type",
+        "keyboard.key",
+        "window_control",
+        "clipboard_write",
+        "text_editor.edit",
+        "bash",
+    ] {
+        assert_eq!(
+            classify_tool(name, &serde_json::Value::Null),
+            ToolKind::Mutate,
+            "expected {name} to be Mutate"
+        );
+    }
+}
+
+#[test]
+fn wait_classification_depends_on_condition() {
+    let seconds = serde_json::json!({ "condition": "seconds", "seconds": 1.0 });
+    let appears = serde_json::json!({ "condition": "window_appears" });
+    let screen = serde_json::json!({ "condition": "screen_change" });
+    assert_eq!(classify_tool("wait", &seconds), ToolKind::Observe);
+    assert_eq!(classify_tool("wait", &appears), ToolKind::Mutate);
+    assert_eq!(classify_tool("wait", &screen), ToolKind::Mutate);
+    // Missing condition → fall back to Observe (callers will fail validation
+    // before this point but we don't want to crash on malformed args).
+    assert_eq!(
+        classify_tool("wait", &serde_json::Value::Null),
+        ToolKind::Observe
+    );
 }
