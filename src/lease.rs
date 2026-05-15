@@ -47,3 +47,33 @@ pub fn lease_path() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("/tmp"));
     base.join("kde-mcp").join("lease.json")
 }
+
+/// Liveness probe — signal 0 returns 0 if the process exists.
+/// EPERM also indicates existence (we lack permission to signal).
+#[cfg(unix)]
+pub(crate) fn pid_alive(pid: u32) -> bool {
+    if pid == 0 {
+        return false;
+    }
+    let r = unsafe { libc::kill(pid as i32, 0) };
+    if r == 0 {
+        return true;
+    }
+    std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+}
+
+#[cfg(not(unix))]
+pub(crate) fn pid_alive(_pid: u32) -> bool {
+    false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pid_alive_true_for_self_false_for_zero() {
+        assert!(pid_alive(std::process::id()));
+        assert!(!pid_alive(0));
+    }
+}
