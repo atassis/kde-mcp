@@ -180,7 +180,10 @@ impl KdeMcp {
         let mode = self.mode.as_str();
         let session_id = self.session_id.map(|s| s.to_string());
         let tray = self.tray.clone();
-        Ok(dispatch_audited(
+        // Routes the PNG back as an MCP image-content block (not as a
+        // base64 string inside a JSON tool result) so Claude Code can
+        // deliver the pixels into the model's vision pathway directly.
+        Ok(dispatch_audited_with_content(
             audit,
             tray,
             self.lease.clone(),
@@ -648,6 +651,105 @@ where
                 None,
             )
         }
+        Err(e) => {
+            let code = e.code();
+            let msg = e.to_string();
+            let details = serde_json::to_value(&e).unwrap_or(serde_json::Value::Null);
+            let payload = serde_json::json!({ "code": code, "details": details });
+            let r =
+                CallToolResult::error(vec![Content::text(msg), Content::text(payload.to_string())]);
+            (r, Some(payload))
+        }
+    };
+    let rec = crate::audit::AuditRecord {
+        ts: String::new(),
+        mode,
+        tool: tool.to_string(),
+        args: redacted_args,
+        ok: audit_error.is_none(),
+        duration_ms: Some(duration_ms),
+        error: audit_error,
+        vision_fallback: None,
+        session_id,
+    };
+    if let Err(e) = audit.write(rec).await {
+        tracing::error!(error = %e, tool, "audit write failed");
+    }
+    call_result
+}
+
+/// Like [`dispatch_audited`], but the tool future yields `Vec<Content>`
+/// directly instead of a serialisable typed payload. Used by tools that
+/// need to return MCP image/audio content (e.g. `screenshot`) so the
+/// payload reaches the model via its native vision/audio pathway
+/// instead of being base64-encoded into a JSON-text content block.
+///
+/// Lease, tray-guard, timing, audit-record, and error-handling semantics
+/// are identical to `dispatch_audited`. Keep the two in sync.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn dispatch_audited_with_content<F>(
+    audit: Arc<AuditLog>,
+    tray: Arc<crate::tray::TrayState>,
+    lease: Arc<crate::lease::LeaseStore>,
+    tool_kind: crate::lease::ToolKind,
+    mode: &'static str,
+    session_id: Option<String>,
+    tool: &'static str,
+    args: serde_json::Value,
+    fut: F,
+) -> CallToolResult
+where
+    F: std::future::Future<Output = Result<Vec<Content>, ToolError>>,
+{
+    let lease_held = match tool_kind {
+        crate::lease::ToolKind::Mutate => match lease.acquire(tool).await {
+            Ok(()) => true,
+            Err(e) => {
+                let err: ToolError = e.into();
+                let code = err.code();
+                let msg = err.to_string();
+                let details = serde_json::to_value(&err).unwrap_or(serde_json::Value::Null);
+                let payload = serde_json::json!({ "code": code, "details": details });
+                let r = CallToolResult::error(vec![
+                    Content::text(msg),
+                    Content::text(payload.to_string()),
+                ]);
+                let rec = crate::audit::AuditRecord {
+                    ts: String::new(),
+                    mode,
+                    tool: tool.to_string(),
+                    args: crate::audit::redact(tool, args),
+                    ok: false,
+                    duration_ms: Some(0),
+                    error: Some(payload),
+                    vision_fallback: None,
+                    session_id: session_id.clone(),
+                };
+                if let Err(e) = audit.write(rec).await {
+                    tracing::error!(error = %e, tool, "audit write failed");
+                }
+                return r;
+            }
+        },
+        crate::lease::ToolKind::Observe => {
+            let _ = lease.refresh_if_holder();
+            false
+        }
+    };
+    let _guard = crate::tray::TrayGuard::enter(&tray, tool);
+    let started = std::time::Instant::now();
+    let outcome = fut.await;
+    let duration_ms = started.elapsed().as_millis() as u64;
+
+    if lease_held
+        && (tray.cancel.is_cancelled() || matches!(outcome, Err(ToolError::Cancelled { .. })))
+    {
+        let _ = lease.release_if_holder();
+    }
+
+    let redacted_args = crate::audit::redact(tool, args);
+    let (call_result, audit_error) = match outcome {
+        Ok(content) => (CallToolResult::success(content), None),
         Err(e) => {
             let code = e.code();
             let msg = e.to_string();

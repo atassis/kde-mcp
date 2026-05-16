@@ -4,8 +4,10 @@ use crate::refs::{RefError, RefKind};
 use crate::server::KdeMcp;
 use crate::util::image::{is_terminal_class, mask_rectangles, resize_long_edge};
 use base64::Engine as _;
+use rmcp::model::Content;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use std::time::Duration;
 
 #[derive(Debug, Default, Deserialize, JsonSchema, Serialize)]
@@ -27,24 +29,29 @@ pub enum ScreenshotRegion {
     Rect([i32; 4]),
 }
 
+/// Metadata block that travels alongside the image content.
+///
+/// `png_base64` is intentionally omitted — the PNG goes back to the model
+/// as an [`rmcp::model::Content::image`] block, not as a base64 string
+/// inside a JSON tool result. The earlier shape (`{format, original_size,
+/// returned_size, scale_factor, png_base64}`) forced the client to decode
+/// the bytes from text, which (a) wastes context-window tokens on the
+/// base64 string and (b) prevents Claude Code from routing the image
+/// into the model's vision pathway. With the `Content::image` block, the
+/// MCP spec's image-content type carries the bytes natively and the model
+/// sees the screenshot in one pass.
 #[derive(Debug, Default, Serialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
-pub struct ScreenshotResponse {
+pub struct ScreenshotMetadata {
     pub original_size: [u32; 2],
     pub returned_size: [u32; 2],
     pub scale_factor: f32,
     pub format: String,
-    /// Base64-encoded PNG bytes. Phase 1 returns the bytes inline in the
-    /// structured payload; Phase 4 polish may add an image content block.
-    pub png_base64: String,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<String>,
 }
 
-pub async fn screenshot(
-    state: &KdeMcp,
-    args: ScreenshotArgs,
-) -> Result<ScreenshotResponse, ToolError> {
+pub async fn screenshot(state: &KdeMcp, args: ScreenshotArgs) -> Result<Vec<Content>, ToolError> {
     let region = resolve_region(state, args.region.as_ref()).await?;
     let include_cursor = args.include_cursor.unwrap_or(true);
 
@@ -60,14 +67,23 @@ pub async fn screenshot(
     let (terminals, mask_warnings) = list_terminal_rects(state, &region).await;
     let processed = process_image(captured, args.max_long_edge, &terminals)?;
 
-    Ok(ScreenshotResponse {
+    let png_base64 = base64::engine::general_purpose::STANDARD.encode(&processed.png);
+    let meta = ScreenshotMetadata {
         original_size: [processed.original.0, processed.original.1],
         returned_size: [processed.returned.0, processed.returned.1],
         scale_factor: processed.scale,
         format: "png".into(),
-        png_base64: base64::engine::general_purpose::STANDARD.encode(&processed.png),
         warnings: mask_warnings,
-    })
+    };
+    let meta_json = serde_json::to_value(&meta).unwrap_or_else(|_| json!({}));
+
+    // First block: the image itself, routed to the model's vision input.
+    // Second block: structured metadata (size, scale, warnings) so the
+    // model can reason about coordinate scaling without round-tripping.
+    Ok(vec![
+        Content::image(png_base64, "image/png"),
+        Content::text(meta_json.to_string()),
+    ])
 }
 
 async fn resolve_region(
