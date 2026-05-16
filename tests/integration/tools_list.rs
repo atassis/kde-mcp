@@ -4,17 +4,15 @@ use kde_mcp::cli::Mode;
 use std::collections::HashSet;
 use std::sync::Arc;
 
-/// Spec §6 names 15 logical tools. On the wire we expose 16 names because
-/// keyboard/text_editor each split into a .type/.key and .view/.edit pair
-/// (window_query/control and clipboard_read/write also count as two
-/// distinct wire names but they're "two logical tools" in the spec's table
-/// — so the 15→16 delta comes from the keyboard and text_editor splits).
+/// Post-ADR-0013, the wire surface is 12 tools. `keyboard.{type,key}`,
+/// `window_{query,control}`, and `clipboard_{read,write}` are the three
+/// split-along-safety pairs; everything else is one wire name per logical
+/// tool. ADR-0013 removed `bash`, `text_editor.{view,edit}`, and `wait`.
 const EXPECTED_WIRE_NAMES: &[&str] = &[
     "observe",
     "inspect",
     "screenshot",
     "read_text",
-    "wait",
     "act_on_element",
     "mouse",
     "keyboard.type",
@@ -23,9 +21,6 @@ const EXPECTED_WIRE_NAMES: &[&str] = &[
     "window_control",
     "clipboard_read",
     "clipboard_write",
-    "bash",
-    "text_editor.view",
-    "text_editor.edit",
 ];
 
 /// Stub state. Per Task 2 of Phase 1, `KdeMcp::new` requires an `AuditLog`
@@ -47,7 +42,7 @@ async fn test_state() -> KdeMcp {
 }
 
 #[tokio::test]
-async fn server_advertises_sixteen_tools_with_expected_names() {
+async fn server_advertises_twelve_tools_with_expected_names() {
     let server = test_state().await;
     let names: HashSet<String> = server
         .tool_router
@@ -60,8 +55,8 @@ async fn server_advertises_sixteen_tools_with_expected_names() {
 
     assert_eq!(
         names.len(),
-        16,
-        "expected 16 wire tool names, got {names:?}"
+        12,
+        "expected 12 wire tool names, got {names:?}"
     );
     assert!(
         names == expected,
@@ -79,10 +74,8 @@ async fn read_only_hint_is_set_on_observation_tools() {
         "inspect",
         "screenshot",
         "read_text",
-        "wait",
         "window_query",
         "clipboard_read",
-        "text_editor.view",
     ];
     for tool in server.tool_router.list_all() {
         if observation.contains(&tool.name.as_ref()) {
@@ -106,8 +99,6 @@ async fn destructive_hint_is_set_on_mutating_tools() {
         "keyboard.key",
         "window_control",
         "clipboard_write",
-        "bash",
-        "text_editor.edit",
     ];
     for tool in server.tool_router.list_all() {
         if mutating.contains(&tool.name.as_ref()) {
@@ -121,8 +112,11 @@ async fn destructive_hint_is_set_on_mutating_tools() {
     }
 }
 
+/// After ADR-0013 removed `bash`, no remaining tool carries
+/// `openWorldHint: true`. Every action this MCP performs has a well-defined
+/// scope (a window, an element, the clipboard, the desktop).
 #[tokio::test]
-async fn open_world_hint_is_set_only_on_bash() {
+async fn no_tool_has_open_world_hint() {
     let server = test_state().await;
     for tool in server.tool_router.list_all() {
         let open = tool
@@ -130,10 +124,6 @@ async fn open_world_hint_is_set_only_on_bash() {
             .as_ref()
             .and_then(|a| a.open_world_hint)
             .unwrap_or(false);
-        if tool.name == "bash" {
-            assert!(open, "bash should have open_world_hint=true");
-        } else {
-            assert!(!open, "{} should not have open_world_hint=true", tool.name);
-        }
+        assert!(!open, "{} should not have open_world_hint=true", tool.name);
     }
 }

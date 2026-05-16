@@ -63,7 +63,7 @@ Examples baked into this design:
 - `act_on_element` failures return `available_actions` and a `fallback_suggestion`.
 - `screenshot` responses include the structural snapshot at capture time.
 - Sensitive-path edits return `warnings: ["modified file under ~/.ssh/"]`.
-- Virtual mode with no windows returns `hint: "virtual session has no running apps; use bash to launch one"`.
+- Virtual mode with no windows returns `hint: "virtual session has no running apps"` (post-[[adr/0013-remove-shell-and-file-tools]]: the host's own bash can launch one; this MCP no longer ships its own).
 
 Tool descriptions become factual and short. The response shape carries the rest.
 
@@ -158,18 +158,18 @@ Two processes, two audit logs, two failure domains, no internal mode-routing plu
 │  └────────────────────────────────────────────────────────────────┘  │
 │                                                                      │
 │  Tools (each module ≈ 1 file in src/tools/):                         │
-│    observe · inspect · screenshot · read_text · wait                 │
+│    observe · inspect · screenshot · read_text                        │
 │    act_on_element · mouse · keyboard                                 │
 │    window_query · window_control                                     │
 │    clipboard_read · clipboard_write                                  │
-│    bash · text_editor_view · text_editor_edit                        │
+│    (ADR-0013 removed bash / text_editor_view / text_editor_edit /    │
+│     wait — host's native tools cover those domains)                  │
 │                                                                      │
 │  Backend services:                                                   │
 │    src/kwin/scripting.rs    — workspace queries via loadScript       │
 │    src/kwin/screenshot.rs   — org.kde.KWin.ScreenShot2 client        │
 │    src/kwin/eis.rs          — org.kde.KWin.EIS.RemoteDesktop → reis  │
 │    src/atspi.rs             — connection, tree, element-ref encoding │
-│    src/util/pty.rs          — portable-pty persistent bash session   │
 │                                                                      │
 │  Cross-cutting:                                                      │
 │    src/audit.rs             — JSONL audit log writer                 │
@@ -276,12 +276,14 @@ Every destructive tool call passes through a shared policy gate before any side 
    - Returns `isError: true, code: "app_approval_required", details: { app_class, app_title, requested_action, current_tier, sentinel_warning?, notification_id }`
    - In parallel, fires `org.freedesktop.Notifications.Notify` with actions `Allow once` / `Allow this session` / `Deny`. The notification's `app_id` is `kde-mcp` so it surfaces in KDE's notification UI consistently.
    - User picks → in-memory `HashMap<app_class, ApprovalState>` updated. Agent retries the tool; gate now passes.
-   - If agent retries before user clicks: returns the same error with `still_pending: true`. Agent uses `wait { seconds: 2 }` between retries.
+   - If agent retries before user clicks: returns the same error with `still_pending: true`. Agent should back off briefly between retries (e.g., a short observe call that also refreshes the lease).
 6. **Sentinel warning emission** — if the target app's tier table marks `sentinel: "shell_access" | "filesystem_access" | "system_settings"`, the response carries `warnings: ["target_app:konsole — equivalent to shell access"]`. Visible to the model and the user without blocking the action.
 
 The gate is the only entry point to side effects. New destructive tools added later inherit all six steps for free.
 
-### 6.1 Read-only tools (8)
+### 6.1 Read-only tools (6)
+
+> Post-ADR-0013: the original §6.1 listed `wait` and `text_editor_view` here. Both removed; see [[adr/0013-remove-shell-and-file-tools]].
 
 #### `observe`
 **Annotations:** `readOnlyHint: true`
@@ -317,7 +319,7 @@ include_other_windows?: bool = true     # in summary mode, just a count
   },
   "windows": [ {ref, title, class, geometry, screen} ],  // only in "interactive"/"full"
   "screens": [ {name, geometry, scale, primary} ],       // only in "full"
-  "hint": "virtual session has no running apps; use bash to launch one"  // only when relevant
+  "hint": "virtual session has no running apps"  // only when relevant
 }
 ```
 
@@ -380,35 +382,6 @@ include_bboxes?: bool = false
 ```
 **Returns:** text content block (`trust: external`). With bboxes: `structuredContent.words: [{text, bbox, confidence}]`.
 
-#### `wait`
-**Annotations:** `readOnlyHint: true` (waiting itself changes nothing; what is being waited on is a separate tool call)
-**Description:** Block until a structured condition is met. Replaces arbitrary sleeps.
-**Params:**
-```
-condition: "seconds" | "screen_change" | "window_appears" | "window_disappears"
-         | "element_appears" | "element_disappears" | "element_state"
-timeout_ms?: int = 5000
-seconds?: number                        # for "seconds"
-region?: same as screenshot             # for "screen_change"
-pixel_threshold?: float = 0.02
-match?: { title_regex?, class?, pid? }  # window match criteria
-element_match?: { role?, name_pattern?, in_window?: <ref> }
-required_state?: string                 # for "element_state"
-```
-**Returns** (`structuredContent`):
-```jsonc
-{
-  "matched": true,
-  "elapsed_ms": 743,
-  "matched_window": {ref, title, class},   // when applicable
-  "matched_element": {id, role, name},     // when applicable
-  // on timeout:
-  "timed_out": true,
-  "closest_match": { /* best near-miss */ },
-  "current_windows": [ ... ]
-}
-```
-
 #### `window_query`
 **Annotations:** `readOnlyHint: true`
 **Description:** List windows or fetch geometry. No state changes.
@@ -430,16 +403,9 @@ encoding?: "utf8" | "base64" = "utf8"
 ```
 **Returns:** content + `structuredContent.origin: "external" | "agent_authored"` so the agent knows whether to treat clipboard as untrusted.
 
-#### `text_editor_view`
-**Annotations:** `readOnlyHint: true`
-**Description:** View a file or list a directory. Matches Anthropic `str_replace_based_edit_tool` view semantics (cat -n with 1-indexed line numbers; directories via `find -maxdepth 2`).
-**Params:**
-```
-path: string (absolute)
-view_range?: [int, int]                 # 1-indexed inclusive; -1 = EOF
-```
+### 6.2 Destructive tools (5)
 
-### 6.2 Destructive tools (7)
+> Post-ADR-0013: the original §6.2 listed `bash` and `text_editor_edit` here. Both removed; see [[adr/0013-remove-shell-and-file-tools]].
 
 #### `act_on_element`
 **Annotations:** `destructiveHint: true`
@@ -528,55 +494,9 @@ mime_type?: string = "text/plain"
 encoding?: "utf8" | "base64" = "utf8"
 ```
 
-#### `bash`
-**Annotations:** `destructiveHint: true`, `openWorldHint: true`
-**Description:** Run a command in a persistent shell session (one PTY for the life of the MCP process, lazy-started on first call). Output capped at 16k chars with a `full_output` resource_link to the captured file.
-**Params:**
-```
-command?: string                        # required unless restart
-restart?: bool                          # tear down and re-spawn the PTY
-timeout_ms?: int = 120000
-```
-**Returns:**
-```jsonc
-{
-  "ok": true,
-  "exit_code": 0,
-  "stdout": { "trust": "external", "text": "..." },
-  "stderr": { "trust": "external", "text": "..." },
-  "truncated": false,
-  "full_output": "file:///tmp/.../bash-out-<id>.txt",   // when truncated
-  "warnings": []                                         // sensitive-path / blocklist near-misses
-}
-```
-
-**Server-side blocklist** (enforced before exec, returns `permission_denied`):
-- `rm -rf /` and any variant ending at root
-- `rm -rf ~` / `rm -rf $HOME`
-- `dd of=/dev/sd[a-z]*`
-- `mkfs.*` against block devices
-- Fork bombs: `:(){:|:&};:`
-- `sudo` and `pkexec` unless `--allow-sudo` config knob is set
-
-These rules are not security; they are oh-shit prevention. The audit log records the attempt.
-
-#### `text_editor_edit`
-**Annotations:** `destructiveHint: true`
-**Description:** Create / replace-in / insert-into files. Matches Anthropic `str_replace_based_edit_tool` semantics for `create`, `str_replace`, `insert`. (No `undo_edit` — matches the newer Anthropic versions.)
-**Params:**
-```
-command: "create" | "str_replace" | "insert"
-path: string (absolute)
-file_text?: string                      # for create
-old_str?: string                        # for str_replace; must match exactly once
-new_str?: string                        # for str_replace
-insert_line?: int                       # for insert; 0 = top
-insert_text?: string                    # for insert
-```
-**Returns:** snippet of changed lines (matching reference impl ±4 lines of context). `warnings: []` includes any sensitive-path matches:
-- `~/.ssh/`, `~/.gnupg/`, `/etc/`, `~/.config/keepassxc/`, `~/.config/git/`, `~/.aws/`, `~/.kube/`
-
 ### 6.3 Tool count summary
+
+Post-[[adr/0013-remove-shell-and-file-tools]]: 11 logical tools, 12 wire names.
 
 | # | Tool | Type |
 |---|------|------|
@@ -584,17 +504,13 @@ insert_text?: string                    # for insert
 | 2 | `inspect` | read-only |
 | 3 | `screenshot` | read-only |
 | 4 | `read_text` | read-only |
-| 5 | `wait` | read-only |
-| 6 | `window_query` | read-only |
-| 7 | `clipboard_read` | read-only |
-| 8 | `text_editor_view` | read-only |
-| 9 | `act_on_element` | destructive |
-| 10 | `mouse` | destructive |
-| 11 | `keyboard` | destructive |
-| 12 | `window_control` | destructive |
-| 13 | `clipboard_write` | destructive |
-| 14 | `bash` | destructive |
-| 15 | `text_editor_edit` | destructive |
+| 5 | `window_query` | read-only |
+| 6 | `clipboard_read` | read-only |
+| 7 | `act_on_element` | destructive |
+| 8 | `mouse` | destructive |
+| 9 | `keyboard` (split: `keyboard.type` / `keyboard.key`) | destructive |
+| 10 | `window_control` | destructive |
+| 11 | `clipboard_write` | destructive |
 
 ---
 
@@ -652,7 +568,7 @@ When a tool that takes a ref receives one that the server cannot resolve, it ret
 - **Window list cache:** rebuilt eagerly on KWin signals `windowAdded`, `windowRemoved`, `windowActivated`. TTL 1 s as fallback for missed signals.
 - **Element-app-root cache:** maps `(window_uuid → atspi_app_root)`. Rebuilt on KWin window-added signal. Element refs themselves are pass-throughs to atspi object paths.
 - **Screenshot cache:** none. Always fresh.
-- **Bash session:** persistent for the life of the process; restart explicitly via `bash {restart: true}`.
+<!-- ADR-0013: bash tool removed; no persistent shell session to cache. -->
 
 ---
 
@@ -704,19 +620,18 @@ The audit log is local-only. No telemetry, no phone-home, no opentelemetry endpo
 
 The MCP server cooperates with the host's permission mode (Claude Code's `default` / `acceptEdits` / `bypassPermissions` / `plan`) via correct annotations. **In addition**, it implements its own gate (§6.0) inspired by Anthropic's `computer-use` safety architecture; the two layers compose.
 
-Eight layers:
+Nine layers (post-[[adr/0013-remove-shell-and-file-tools]] retired two bash-specific layers):
 
-1. **Honest tool annotations.** `readOnlyHint: true` on the 8 observation tools; `destructiveHint: true` on the 7 mutating tools. `openWorldHint: true` on `bash`. Hosts use these to decide which to auto-allow vs. prompt.
+1. **Honest tool annotations.** `readOnlyHint: true` on the 6 observation tools; `destructiveHint: true` on the 5 mutating tools. No tool carries `openWorldHint: true` after [[adr/0013-remove-shell-and-file-tools]] retired `bash`. Hosts use these to decide which to auto-allow vs. prompt.
 2. **Audit log always on.** Local JSONL; `tail -f` for live review. Every gate decision (approval grant, tier rejection, cancellation) is also logged.
 3. **Per-session mutation lease.** `$XDG_RUNTIME_DIR/kde-mcp/lease.json` (POSIX flock on read/write). Multiple `kde-mcp --mode=live` may run concurrently — one per Claude Code session. Mutating tool calls serialize via the lease (acquire on dispatch, refresh on each subsequent call by the same holder, auto-expire after `idle_timeout` of inactivity, release on process exit / cancel). Observation calls are never blocked. Stale holders detected via `kill -0`. Notifications via `org.freedesktop.Notifications` on first acquire ("Claude is using your computer · press Meta+Esc to stop") and on clean shutdown ("Claude finished using your computer"). See `docs/adr/0011-multi-session-lease.md`.
 4. **Per-app approval per session** (gate step 5). First destructive tool against a not-yet-approved app returns `app_approval_required` and fires a notification with `Allow once` / `Allow this session` / `Deny` action buttons. State is in-memory, lost on process restart.
 5. **App-category tiering** (gate step 4). `view_only` (browsers): destructive tools blocked. `click_only` (terminals, IDEs): typing blocked, click/navigation allowed. `full`: default. Table at `~/.config/kde-mcp/policy.toml`, user-overridable. Tier rejection returns `tier_restricted`.
 6. **Sentinel warnings** (gate step 6). When a destructive action targets an app marked with a sentinel (`shell_access`, `filesystem_access`, `system_settings`), the response carries `warnings: [...]`. Non-blocking; informational for both the model and the user.
 7. **Terminal-excluded screenshots.** When `screenshot` is invoked, terminal-class windows (`konsole`, `yakuake`, `alacritty`, `kitty`, `wezterm`, `foot`, `ghostty`, `tilix`, `gnome-terminal`, `xterm`, `xfce4-terminal`, `ptyxis`, `warp-terminal`, …) are detected via KWin Scripting and their geometry is overwritten with a solid black rectangle + `[terminal masked]` label before the PNG is returned. Defense against on-screen content in the agent's own terminal feeding back as prompt injection. Config-overridable per class.
-8. **Server-side hard blocklist for `bash`.** Cannot be disabled via MCP arguments (only via launch-time config). Patterns: `rm -rf /`, `rm -rf ~`, `dd of=/dev/sd*`, `mkfs.*`, `:(){:|:&};:`, raw `sudo`/`pkexec` (unless `--allow-sudo` config).
-9. **Sensitive-path warnings (not blocks).** `text_editor_edit` and `bash` responses include `warnings: [...]` when touching `~/.ssh/`, `~/.gnupg/`, `/etc/`, `~/.config/keepassxc/`, `~/.config/git/`, `~/.aws/`, `~/.kube/`. The host's permission mode decides whether to escalate.
-10. **Trust wrappers on external strings.** Any model-readable text from window content / clipboard read / OCR / bash stdout / file content carries `trust: "external"`. The agent sees data marked as data, not as instructions. Structural defense that the agent cannot override.
-11. **Global cancel shortcut.** `Meta+Esc` (default; configurable) registered via KDE's KGlobalAccel D-Bus interface. KWin grabs the key at the compositor level — apps don't see it (so prompt injection cannot dismiss it). On press, every in-flight tool aborts at the next safe point and returns `cancelled`. A KDE notification appears: "Claude aborted by user."
+<!-- ADR-0013 retired layers 8 (bash blocklist) and 9 (sensitive-path warnings on bash/text_editor_edit). The host's bash retains responsibility for shell-command safety. -->
+8. **Trust wrappers on external strings.** Any model-readable text from window content / clipboard read / OCR carries `trust: "external"`. The agent sees data marked as data, not as instructions. Structural defense that the agent cannot override.
+9. **Global cancel shortcut.** `Meta+Esc` (default; configurable) registered via KDE's KGlobalAccel D-Bus interface. KWin grabs the key at the compositor level — apps don't see it (so prompt injection cannot dismiss it). On press, every in-flight tool aborts at the next safe point and returns `cancelled`. A KDE notification appears: "Claude aborted by user."
 
 **No mid-call `elicitation/create` prompts** in MVP — they're inconsistently supported by clients and would override the user's chosen permission mode. The per-app approval notification (#4) replaces this with an OS-level UI that integrates with KDE's notification flow.
 
@@ -831,14 +746,10 @@ kde-mcp/
 │   │   ├── mouse.rs
 │   │   ├── keyboard.rs
 │   │   ├── window.rs             # window_query + window_control
-│   │   ├── clipboard.rs          # clipboard_read + clipboard_write
-│   │   ├── wait.rs
-│   │   ├── bash.rs
-│   │   └── text_editor.rs        # text_editor_view + text_editor_edit
+│   │   └── clipboard.rs          # clipboard_read + clipboard_write
 │   └── util/
 │       ├── mod.rs
-│       ├── image.rs              # ARGB→PNG, resize, scale-factor math, terminal-mask overlay
-│       └── pty.rs                # persistent bash session
+│       └── image.rs              # ARGB→PNG, resize, scale-factor math, terminal-mask overlay
 ├── packaging/
 │   ├── kde-mcp.desktop
 │   └── README-install.md
@@ -876,7 +787,6 @@ The pinned versions in HANDOFF.md (`rmcp = "0.1"`, `reis = "0.4"`, `atspi = "0.2
 | `zbus` | `5.15.0` | |
 | `tokio` | `1.52` (current at design time; floor `1.40`) | multi-thread runtime, default features. |
 | `notify-rust` | `4.17.0` | `org.freedesktop.Notifications` client; action-button delivery is the load-bearing surface. |
-| `portable-pty` | `0.9.0` | persistent bash session. |
 | `fd-lock` | `4.0.4` | single-session lockfile. |
 | `image` | `0.25.10` | ARGB → PNG, resize, terminal-mask overlay. |
 | `tesseract` | `0.15.2` (binding) | OCR. `leptess 0.14` is an alternative if `tesseract` proves brittle. |

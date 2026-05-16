@@ -28,31 +28,15 @@ pub struct AuditRecord {
 /// Redact sensitive args before audit-log persistence per spec §9.
 ///
 /// - `clipboard_write.content`: always hashed (never plaintext).
-/// - `text_editor_edit.{old_str,new_str,content}`: hashed when > 500 chars.
 /// - Everything else passes through verbatim.
 pub fn redact(tool: &str, args: Value) -> Value {
     let Value::Object(mut map) = args else {
         return args;
     };
-    match tool {
-        "clipboard_write" => {
-            if let Some(content) = map.get_mut("content") {
-                *content = json!({ "sha256": placeholder_hash(content) });
-            }
+    if tool == "clipboard_write" {
+        if let Some(content) = map.get_mut("content") {
+            *content = json!({ "sha256": placeholder_hash(content) });
         }
-        "text_editor_edit" => {
-            for key in ["old_str", "new_str", "content"] {
-                if let Some(v) = map.get_mut(key) {
-                    if let Some(s) = v.as_str() {
-                        if s.len() > 500 {
-                            let len = s.len();
-                            *v = json!({ "sha256": placeholder_hash(v), "len": len });
-                        }
-                    }
-                }
-            }
-        }
-        _ => {}
     }
     Value::Object(map)
 }
@@ -269,22 +253,9 @@ mod tests {
     }
 
     #[test]
-    fn long_text_editor_strings_are_redacted() {
-        let big = "x".repeat(501);
-        let r = redact("text_editor_edit", json!({"old_str": big}));
-        assert!(r["old_str"]["sha256"].is_string());
-        assert_eq!(r["old_str"]["len"], 501);
-    }
-
-    #[test]
-    fn short_text_editor_strings_pass_through() {
-        let r = redact("text_editor_edit", json!({"old_str": "short"}));
-        assert_eq!(r["old_str"], "short");
-    }
-
-    #[test]
     fn unrelated_tools_pass_through_verbatim() {
-        let r = redact("bash", json!({"command": "rm -rf /"}));
-        assert_eq!(r["command"], "rm -rf /");
+        let r = redact("mouse", json!({"action": "click", "coordinate": [100, 200]}));
+        assert_eq!(r["action"], "click");
+        assert_eq!(r["coordinate"], json!([100, 200]));
     }
 }

@@ -17,7 +17,7 @@ name = "kde-mcp"
 path = "src/main.rs"
 
 # Phase 0 deps only. Each subsequent phase adds the dependencies it actually
-# uses (atspi, reis, xkbcommon, portable-pty, image, tesseract, ...).
+# uses (atspi, reis, xkbcommon, image, tesseract, ...).
 [dependencies]
 rmcp           = { version = "1.7", features = ["server", "macros", "transport-io", "transport-streamable-http-server"] }
 tokio          = { version = "1.40", features = ["rt-multi-thread", "macros", "signal", "time", "sync", "io-std", "fs", "process"] }
@@ -52,10 +52,9 @@ tempfile       = "3.10"
 # Phase 2 additions:
 reis           = { version = "=0.6.1", features = ["tokio"] }
 
-# Phase 3+ additions:
+# Phase 3+ additions (ADR-0013 retired portable-pty + strip-ansi-escapes
+# along with the bash tool):
 toml           = "0.8"
-portable-pty   = "0.9"
-strip-ansi-escapes = "0.2"
 tokio-util     = "0.7"
 
 # Deferral push (2026-05-15):

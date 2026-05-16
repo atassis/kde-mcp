@@ -40,7 +40,7 @@ Every action returns a structured `diff` (`windows_added`, `focused_element`, `c
 
 ### 3. Structural trust-marking on every external string
 
-Window titles, AT-SPI labels, clipboard reads, OCR text, bash stdout, file contents — every model-readable string carries `trust: "external"`. The model sees data marked as data, not as instructions. Anthropic relies on the server-side classifier; we add a structural defense the agent can read in-context. (Spec §10 layer 10)
+Window titles, AT-SPI labels, clipboard reads, OCR text — every model-readable string the MCP returns carries `trust: "external"`. The model sees data marked as data, not as instructions. Anthropic relies on the server-side classifier; we add a structural defense the agent can read in-context. (Spec §10 layer 8, post-ADR-0013)
 
 ### 4. Token economy
 
@@ -58,9 +58,11 @@ No screenshot after every action. No 700–1000 tokens per response. On a 10-act
 
 - `window_query` — list/find windows by criteria, no screenshot needed
 - `window_control` — focus/move/resize by ref
-- `wait` with structured conditions (`window_appears`, `element_appears`, `screen_change`)
 - `inspect` — paginated a11y-tree drilldown
 - `clipboard_read/write` — first-class clipboard with origin info
+- `act_on_element` — direct AT-SPI action invocation against a ref (no input emulation needed)
+
+Anthropic's `computer-use` also ships `bash` and `text_editor` — we explicitly **do not**. ADR-0013 records the rule: an MCP tool earns its place only when the host can't already run the equivalent. Claude Code's native bash and Read/Edit/Write cover those domains; duplicating them in this MCP would create parallel state (two shells, two file-edit audit trails) without adding capability.
 
 ### 8. Auditable and extensible
 
@@ -111,11 +113,11 @@ Anthropic ships `computer-use` inside the Claude Code binary; users enable via `
 | **Structural trust-marking** | ❌ classifier substitutes | ✅ `trust: external` wrappers |
 | **Sandboxed virtual mode** | ❌ live only | ✅ `--mode=virtual` |
 | **Programmatic window query/control** | ❌ vision-only | ✅ first-class |
-| **Structured `wait` conditions** | ❌ sleep only | ✅ window/element/screen-change |
 | **Server-side prompt-injection classifier** | ✅ | ❌ structural substitutes |
 | **Hidden non-approved apps during turn** | ✅ | ❌ tier + approval substitute |
 | **Bundled-with-host install** | ✅ | ❌ separate install (.mcpb planned) |
-| **Tool count** | not documented (estimated ~5) | 15 |
+| **`bash` / `text_editor` parity** | ✅ included | ❌ deliberately excluded (ADR-0013 — host owns shell + file edits) |
+| **Tool count** | not documented (estimated ~5) | 11 logical / 12 wire (ADR-0013) |
 
 ---
 

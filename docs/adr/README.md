@@ -13,13 +13,14 @@ Format: 1-2 pages each. Sections: Status · Context · Decision · Consequences 
 | 0003 | Mode per process; no runtime swap | Accepted |
 | 0004 | Response-as-instruction over prompt-prose | Accepted |
 | 0005 | Accessibility-tree first; pixels as fallback | Accepted |
-| 0006 | 15 tools split read/write; no Anthropic-style omni-tool | Accepted |
+| 0006 | 15 tools split read/write; no Anthropic-style omni-tool | Accepted (catalogue trimmed by 0013) |
 | 0007 | Adopt Anthropic computer-use safety architecture (policy gate) | Accepted |
 | 0008 | Visual prompt injection defence is host-side, not server-side  | Accepted |
 | 0009 | Phase 3–6 implementation shape (per-call EIS, SIGUSR1 cancel, …) | Accepted (§2 superseded by 0010) |
 | 0010 | Cancel UX: system tray + Meta+Esc hotkey + dispatch hooks | Accepted (Meta+Esc handoff amended by 0011) |
 | 0011 | Multi-session coexistence via per-session mutation lease | Accepted |
 | 0012 | Singleton daemon with HTTP transport for multi-session desktop use | Accepted |
+| 0013 | Remove `bash`, `text_editor_*`, sleep-only `wait` (MCP-purpose rule) | Accepted |
 
 ## When to add an ADR
 

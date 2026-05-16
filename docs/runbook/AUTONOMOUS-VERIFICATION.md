@@ -161,14 +161,17 @@ Each step calls one tool via the live MCP session, validates the response struct
 
 ### L2.3 — screenshot(region=active_screen)
 **TC-Ref:** TESTING-CHECKLIST.md §"Phase 2 live smoke"
-**Goal:** Capture pixels from the active screen via KWin ScreenShot2.
+**Goal:** Capture pixels from the active screen via KWin ScreenShot2. Verifies the MCP-image-content delivery path (commit `77cf284`): the PNG arrives as a native image-content block — not as a base64 string inside a JSON text block — so Claude Code routes it to the model's vision pathway.
 **Pre:** none.
 **Depends-on:** L1.4
 **Steps:**
 1. Call `mcp__kde-mcp__screenshot` with `{"region":"active_screen"}`.
-2. Save the raw response to `runs/$run_id/L2.3-screenshot.json`.
-**Accept:** response has `image.png` (base64 or resource_link) and `dims:[w,h]` with both > 0.
-**Artefacts:** `L2.3-screenshot.json`.
+2. Save the response envelope (without the binary image data) to `runs/$run_id/L2.3-screenshot.json` — record the `content` block types, their `mimeType` fields, and the parsed metadata JSON. Do **not** dump the base64 bytes into the artefact (would balloon the file 5–10× without adding signal).
+**Accept:**
+- `isError` is false (or absent).
+- `content` array has exactly two blocks: one `{"type":"image","mimeType":"image/png","data":<base64>}` plus one `{"type":"text","text":<metadata-json>}`.
+- The text block parses as JSON containing `original_size:[w,h]`, `returned_size:[w,h]`, and `scale_factor:<float>` with all values > 0.
+**Artefacts:** `L2.3-screenshot.json` (envelope only, no base64).
 **On fail:** signature match against KNOWN-FIXES.md (F7 if connection error). Else log + continue.
 **Cleanup:** none.
 
@@ -185,18 +188,7 @@ Each step calls one tool via the live MCP session, validates the response struct
 **On fail:** signature match against KNOWN-FIXES.md (F7 if connection error, F8 if approval pending). Else log + continue.
 **Cleanup:** none.
 
-### L2.5 — wait(condition=seconds)
-**TC-Ref:** TESTING-CHECKLIST.md §"Phase 4 — remaining destructive tools"
-**Goal:** Block until a structured time condition is met, replacing arbitrary sleeps.
-**Pre:** none.
-**Depends-on:** L1.4
-**Steps:**
-1. Call `mcp__kde-mcp__wait` with `{"condition":"seconds","seconds":0.2}`.
-2. Save the raw response to `runs/$run_id/L2.5-wait.json`.
-**Accept:** `matched:true`; `elapsed_ms` in `[150, 400]`.
-**Artefacts:** `L2.5-wait.json`.
-**On fail:** signature match against KNOWN-FIXES.md (F7 if connection error, F8 if approval pending). Else log + continue.
-**Cleanup:** none.
+<!-- L2.5 removed by ADR-0013: `wait` tool retired (sleep-only form duplicated the host's sleep + any observe call refreshes the lease). -->
 
 ### L2.6 — window_query(action=list)
 **TC-Ref:** TESTING-CHECKLIST.md §"Phase 2 live smoke"
@@ -224,15 +216,7 @@ Each step calls one tool via the live MCP session, validates the response struct
 **On fail:** signature match against KNOWN-FIXES.md (F4 if wl-clipboard missing, F7 if connection error). Else log + continue.
 **Cleanup:** none.
 
-### L2.8 — text_editor.view(path=/etc/hostname)
-**TC-Ref:** TESTING-CHECKLIST.md §"Phase 2 live smoke"
-**Goal:** Read a file or directory listing using an absolute path.
-**Pre:** `/etc/hostname` exists (standard on all Linux distros).
-**Depends-on:** L1.4
-**Steps:**
-1. Call `mcp__kde-mcp__text_editor.view` with `{"path":"/etc/hostname"}`.
-2. Save the raw response to `runs/$run_id/L2.8-text_editor.view.json`.
-**Accept:** response content contains the output of bash `hostname`.
+<!-- L2.8 removed by ADR-0013: `text_editor.view` retired; the host's native `Read` covers it. -->
 **Artefacts:** `L2.8-text_editor.view.json`.
 **On fail:** signature match against KNOWN-FIXES.md (F7 if connection error). Else log + continue.
 **Cleanup:** none.
@@ -315,18 +299,7 @@ Each step calls one tool via the live MCP session, validates the response struct
 **On fail:** signature match against KNOWN-FIXES.md (F7 if connection error, F8 if approval pending). Else log + continue.
 **Cleanup:** none.
 
-### L2.15 — bash(command=echo hello)
-**TC-Ref:** TESTING-CHECKLIST.md §"Phase 4 — remaining destructive tools"
-**Goal:** Run a shell command via a persistent bash PTY session.
-**Pre:** none.
-**Depends-on:** L1.4
-**Steps:**
-1. Call `mcp__kde-mcp__bash` with `{"command":"echo hello","restart":false}`.
-2. Save the raw response to `runs/$run_id/L2.15-bash.json`.
-**Accept:** response `stdout` = `"hello\n"`; `exit_code:0`.
-**Artefacts:** `L2.15-bash.json`.
-**On fail:** signature match against KNOWN-FIXES.md (F7 if connection error, F8 if approval pending). Else log + continue.
-**Cleanup:** none.
+<!-- L2.15 removed by ADR-0013: `bash` tool retired; Claude Code's native bash covers shell access. -->
 
 ### L2.16 — window_control(action=focus)
 **TC-Ref:** TESTING-CHECKLIST.md §"Phase 4 — remaining destructive tools"
@@ -341,19 +314,7 @@ Each step calls one tool via the live MCP session, validates the response struct
 **On fail:** signature match against KNOWN-FIXES.md (F7 if connection error, F8 if approval pending). Else log + continue.
 **Cleanup:** none.
 
-### L2.17 — text_editor.edit(command=create)
-**TC-Ref:** TESTING-CHECKLIST.md §"Phase 4 — remaining destructive tools"
-**Goal:** Edit a file via create/replace/insert/undo — verifying the file-write path end-to-end.
-**Pre:** `/tmp` is writable.
-**Depends-on:** L1.4
-**Steps:**
-1. Call `mcp__kde-mcp__text_editor.edit` with `{"command":"create","path":"/tmp/kde-mcp-runbook-probe.txt","file_text":"probe"}`.
-2. Save the raw response to `runs/$run_id/L2.17-text_editor.edit.json`.
-3. Call `mcp__kde-mcp__bash` with `{"command":"rm /tmp/kde-mcp-runbook-probe.txt","restart":false}` to clean up the probe file.
-**Accept:** `ok:true`.
-**Artefacts:** `L2.17-text_editor.edit.json`.
-**On fail:** signature match against KNOWN-FIXES.md (F7 if connection error, F8 if approval pending). Else log + continue.
-**Cleanup:** `bash` `rm /tmp/kde-mcp-runbook-probe.txt` (already Step 3 above).
+<!-- L2.17 removed by ADR-0013: `text_editor.edit` retired; Claude Code's native Edit/Write covers file mutation. -->
 
 ## Layer 3 — Product scenarios
 
@@ -374,8 +335,8 @@ A subset of the six items at `docs/TESTING-CHECKLIST.md:172`. Only the ones obse
 
 - **B3 (KEEP):** `clipboard_write content=<base64-encoded random 32 bytes> encoding=base64`; `clipboard_read`; decode response; assert bytes round-trip.
 - **B4 (CONDITIONAL on multi-monitor):** Detect `>1` monitor in `env.json`. If yes: `screenshot region=[x,y,w,h]` straddling the seam; record returned dims and visually-inspect that both monitor regions are populated (save PNG for human eyes). If single-monitor: skip with `skipped(precondition: single monitor)`.
-- **B5 (KEEP):** Open Dolphin via `bash launch=dolphin`; `wait` for window; `inspect target=window:<uuid> max_elements=10000`; assert returns in <5 s with `truncated=false` *or* `truncated=true` (either is OK — the failure is hanging / OOM); record element_count.
-- **B6 (KEEP):** `wait condition=screen_change pixel_threshold=0.05 timeout_ms=500` against a confirmed-static screen; assert `matched=false` and `code="timeout"` within 600 ms.
+- **B5 (KEEP, retargeted post-ADR-0013):** Open Dolphin via the runbook executor's own bash (not an MCP tool — `bash` retired); poll `window_query` for the window UUID; `inspect target=window:<uuid> max_elements=10000`; assert returns in <5 s with `truncated=false` *or* `truncated=true` (either is OK — the failure is hanging / OOM); record element_count.
+<!-- B6 retired by ADR-0013 — it tested `wait condition=screen_change`, and the `wait` tool is gone. -->
 
 ### L4.B3 — clipboard binary round-trip
 **TC-Ref:** TESTING-CHECKLIST.md §"Quick-fire bug-bounty list" line 176
@@ -421,30 +382,16 @@ A subset of the six items at `docs/TESTING-CHECKLIST.md:172`. Only the ones obse
 **Pre:** Dolphin installed (`which dolphin`). Else skip.
 **Depends-on:** L1.4
 **Steps:**
-1. Call `mcp__kde-mcp__bash` with `{"command": "dolphin &", "restart": false}` (background-launch).
-2. Call `mcp__kde-mcp__wait` with `{"condition": "window_appears", "match": {"class": "org.kde.dolphin"}, "timeout_ms": 5000}`.
-3. From the wait response, grab the window UUID.
-4. Record start time. Call `mcp__kde-mcp__inspect` with `{"target": "window:<uuid>", "max_elements": 10000}`. Record end time.
-5. Save response to `runs/$run_id/L4.B5-inspect.json`.
+1. **Runbook executor's bash** (not an MCP tool — `mcp__kde-mcp__bash` was retired by ADR-0013): `setsid dolphin >/dev/null 2>&1 &`.
+2. Poll `mcp__kde-mcp__window_query` with `{"action":"list"}` once per 200 ms until a window with `class == "org.kde.dolphin"` appears or 5 s elapses; record the UUID. Treat 5 s without a match as **skip** (Dolphin failed to launch — not a kde-mcp bug).
+3. Record start time. Call `mcp__kde-mcp__inspect` with `{"target": "window:<uuid>", "max_elements": 10000}`. Record end time.
+4. Save response to `runs/$run_id/L4.B5-inspect.json`.
 **Accept:** Call returns within 5 seconds. Response has an `elements` array (`truncated: true` OR `truncated: false` — both acceptable). No timeout / crash.
 **Artefacts:** `L4.B5-inspect.json`, `L4.B5-timing.txt`.
 **On fail:** log + continue.
-**Cleanup:** `window_control action=close window_uuid=<uuid>`.
+**Cleanup:** `mcp__kde-mcp__window_control` `{"action":"close","window_uuid":"<uuid>"}`.
 
-### L4.B6 — wait screen_change on static screen
-**TC-Ref:** TESTING-CHECKLIST.md §"Quick-fire bug-bounty list" line 179
-**Goal:** `wait condition=screen_change` against a static screen times out cleanly rather than blocking forever.
-**Pre:** Don't move the mouse or trigger animations during this step.
-**Depends-on:** L1.4
-**Steps:**
-1. Record start time.
-2. Call `mcp__kde-mcp__wait` with `{"condition": "screen_change", "pixel_threshold": 0.05, "timeout_ms": 500}`.
-3. Record end time.
-4. Save response.
-**Accept:** Response has `matched: false`. Elapsed time in `[400, 800] ms`. Error code (if any) is `timeout`.
-**Artefacts:** `L4.B6-wait.json`, `L4.B6-timing.txt`.
-**On fail:** log + continue.
-**Cleanup:** none.
+<!-- L4.B6 removed by ADR-0013: it tested `wait condition=screen_change`; the `wait` tool is gone. If a future ADR re-adds a KWin-signal-driven condition wait, write a new bug-bounty case against that tool then. -->
 
 ---
 

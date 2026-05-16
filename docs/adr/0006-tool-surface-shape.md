@@ -1,6 +1,6 @@
 # ADR-0006: 15 tools split read/write; no Anthropic-style omni-tool
 
-**Status:** Accepted
+**Status:** Accepted (catalogue trimmed to 11 logical tools by [[0013-remove-shell-and-file-tools]] on 2026-05-16; the split-along-safety / consolidate-along-intent principles in this ADR still govern the remaining tools)
 **Date:** 2026-05-13
 **Deciders:** atassis
 

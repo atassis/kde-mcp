@@ -8,7 +8,6 @@
 // implements each tool.
 
 pub mod act_on_element;
-pub mod bash;
 pub mod clipboard;
 pub mod inspect;
 pub mod keyboard;
@@ -16,6 +15,4 @@ pub mod mouse;
 pub mod observe;
 pub mod read_text;
 pub mod screenshot;
-pub mod text_editor;
-pub mod wait;
 pub mod window;

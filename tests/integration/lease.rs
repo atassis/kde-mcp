@@ -274,7 +274,6 @@ fn observe_tools_classified_as_observe() {
         "read_text",
         "window_query",
         "clipboard_read",
-        "text_editor.view",
     ] {
         assert_eq!(
             classify_tool(name, &serde_json::Value::Null),
@@ -293,8 +292,6 @@ fn mutate_tools_classified_as_mutate() {
         "keyboard.key",
         "window_control",
         "clipboard_write",
-        "text_editor.edit",
-        "bash",
     ] {
         assert_eq!(
             classify_tool(name, &serde_json::Value::Null),
@@ -302,20 +299,4 @@ fn mutate_tools_classified_as_mutate() {
             "expected {name} to be Mutate"
         );
     }
-}
-
-#[test]
-fn wait_classification_depends_on_condition() {
-    let seconds = serde_json::json!({ "condition": "seconds", "seconds": 1.0 });
-    let appears = serde_json::json!({ "condition": "window_appears" });
-    let screen = serde_json::json!({ "condition": "screen_change" });
-    assert_eq!(classify_tool("wait", &seconds), ToolKind::Observe);
-    assert_eq!(classify_tool("wait", &appears), ToolKind::Mutate);
-    assert_eq!(classify_tool("wait", &screen), ToolKind::Mutate);
-    // Missing condition → fall back to Observe (callers will fail validation
-    // before this point but we don't want to crash on malformed args).
-    assert_eq!(
-        classify_tool("wait", &serde_json::Value::Null),
-        ToolKind::Observe
-    );
 }

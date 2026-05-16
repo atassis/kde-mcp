@@ -11,6 +11,5 @@ mod integration {
     pub mod keymap;
     pub mod lease;
     pub mod observe_offline;
-    pub mod text_editor;
     pub mod tools_list;
 }

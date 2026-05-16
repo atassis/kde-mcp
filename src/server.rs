@@ -2,9 +2,9 @@
 //!
 //! Per Phase 0 Spike 0.2, the `#[tool_router]` proc-macro does NOT compose
 //! across multiple `impl` blocks (it emits a duplicate `tool_router()`
-//! constructor → E0592). The 16 wire-named tools therefore live in one
-//! `#[tool_router] impl KdeMcp` block below. Comment dividers preserve the
-//! four-category grouping the spec §6 catalogue uses.
+//! constructor → E0592). The 12 wire-named tools (ADR-0013) therefore live
+//! in one `#[tool_router] impl KdeMcp` block below. Comment dividers preserve
+//! the three-category grouping the post-ADR-0013 catalogue uses.
 //!
 //! Phase 1: every dispatch routes through `dispatch_audited`, which serialises
 //! the args (with redaction), runs the tool future, times it, writes one
@@ -33,7 +33,6 @@ pub struct KdeMcp {
     pub bus: zbus::Connection,
     pub atspi: Arc<crate::atspi::connection::AtspiConnection>,
     pub policy: crate::policy::SharedPolicyGate,
-    pub bash_session: Arc<std::sync::Mutex<Option<crate::tools::bash::BashSession>>>,
     pub tray: Arc<crate::tray::TrayState>,
     pub lease: Arc<crate::lease::LeaseStore>,
     pub tool_router: ToolRouter<KdeMcp>,
@@ -77,7 +76,6 @@ impl KdeMcp {
             bus,
             atspi: Arc::new(crate::atspi::connection::AtspiConnection::default()),
             policy,
-            bash_session: Arc::new(std::sync::Mutex::new(None)),
             tray,
             lease,
             tool_router: Self::tool_router(),
@@ -168,7 +166,7 @@ impl KdeMcp {
     }
 
     #[tool(
-        description = "Capture pixels. Prefer observe/inspect for structural questions. Use a targeted region over 'full' for token efficiency.",
+        description = "Capture pixels as an MCP image-content block. Prefer observe/inspect for structural questions — pixels are the escape hatch. Region targeting: 'window:<ref>' or 'element:<ref>' are far cheaper than 'full' or 'active_screen'. Sizing via `max_long_edge` (default 1280): use 1024 for quick \"is X visible?\" probes, 1280 for UI-element identification, and stay ≤1568 (Anthropic's vision sweet spot — above it the client downsamples server-side and your vision tokens are wasted).",
         annotations(read_only_hint = true)
     )]
     async fn screenshot(
@@ -222,29 +220,6 @@ impl KdeMcp {
             async move { tools::read_text::read_text(self, args).await },
         )
         .await)
-    }
-
-    #[tool(
-        description = "Block until a structured condition (window/element appears, screen changes, etc.). Replaces arbitrary sleeps.",
-        annotations(read_only_hint = true)
-    )]
-    async fn wait(
-        &self,
-        Parameters(args): Parameters<tools::wait::WaitArgs>,
-    ) -> Result<CallToolResult, McpError> {
-        let v = serde_json::to_value(&args).unwrap_or(serde_json::Value::Null);
-        let kind = crate::lease::classify_tool("wait", &v);
-        let audit = self.audit.clone();
-        let mode = self.mode.as_str();
-        let session_id = self.session_id.map(|s| s.to_string());
-        let tray = self.tray.clone();
-        let lease = self.lease.clone();
-        Ok(
-            dispatch_audited(audit, tray, lease, kind, mode, session_id, "wait", v, async move {
-                tools::wait::wait(self, args).await
-            })
-            .await,
-        )
     }
 
     // ---- Action (destructive) ----
@@ -469,90 +444,6 @@ impl KdeMcp {
         .await)
     }
 
-    // ---- Shell + filesystem ----
-
-    #[tool(
-        description = "Run a shell command via a persistent bash session.",
-        annotations(destructive_hint = true, open_world_hint = true)
-    )]
-    async fn bash(
-        &self,
-        Parameters(args): Parameters<tools::bash::BashArgs>,
-    ) -> Result<CallToolResult, McpError> {
-        let v = serde_json::to_value(&args).unwrap_or(serde_json::Value::Null);
-        let audit = self.audit.clone();
-        let mode = self.mode.as_str();
-        let session_id = self.session_id.map(|s| s.to_string());
-        let tray = self.tray.clone();
-        Ok(dispatch_audited(
-            audit,
-            tray,
-            self.lease.clone(),
-            crate::lease::ToolKind::Mutate,
-            mode,
-            session_id.clone(),
-            "bash",
-            v,
-            async move { tools::bash::bash(self, args).await },
-        )
-        .await)
-    }
-
-    #[tool(
-        name = "text_editor.view",
-        description = "Read a file or directory listing (absolute path required).",
-        annotations(read_only_hint = true)
-    )]
-    async fn text_editor_view(
-        &self,
-        Parameters(args): Parameters<tools::text_editor::TextEditorViewArgs>,
-    ) -> Result<CallToolResult, McpError> {
-        let v = serde_json::to_value(&args).unwrap_or(serde_json::Value::Null);
-        let audit = self.audit.clone();
-        let mode = self.mode.as_str();
-        let session_id = self.session_id.map(|s| s.to_string());
-        let tray = self.tray.clone();
-        Ok(dispatch_audited(
-            audit,
-            tray,
-            self.lease.clone(),
-            crate::lease::ToolKind::Observe,
-            mode,
-            session_id.clone(),
-            "text_editor.view",
-            v,
-            async move { tools::text_editor::text_editor_view(self, args).await },
-        )
-        .await)
-    }
-
-    #[tool(
-        name = "text_editor.edit",
-        description = "Edit a file via create/replace/insert/undo (absolute path required).",
-        annotations(destructive_hint = true)
-    )]
-    async fn text_editor_edit(
-        &self,
-        Parameters(args): Parameters<tools::text_editor::TextEditorEditArgs>,
-    ) -> Result<CallToolResult, McpError> {
-        let v = serde_json::to_value(&args).unwrap_or(serde_json::Value::Null);
-        let audit = self.audit.clone();
-        let mode = self.mode.as_str();
-        let session_id = self.session_id.map(|s| s.to_string());
-        let tray = self.tray.clone();
-        Ok(dispatch_audited(
-            audit,
-            tray,
-            self.lease.clone(),
-            crate::lease::ToolKind::Mutate,
-            mode,
-            session_id.clone(),
-            "text_editor.edit",
-            v,
-            async move { tools::text_editor::text_editor_edit(self, args).await },
-        )
-        .await)
-    }
 }
 
 #[tool_handler]

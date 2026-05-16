@@ -10,7 +10,7 @@
 //! - `mouse` → KWin script: "window at coordinate". For `mouse.scroll`
 //!   without coord, falls back to the active window.
 //! - `keyboard.{type,key}` → the currently-focused window's class.
-//! - `bash` / `text_editor.edit` / `clipboard_write` → Classless (see
+//! - `clipboard_write` → Classless (see
 //!   [`crate::policy::TargetApp::Classless`]).
 
 use crate::error::ToolError;

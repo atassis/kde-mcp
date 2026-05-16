@@ -19,8 +19,8 @@
 //!    `sentinel = "shell_access" | ...`, attaches a non-blocking warning
 //!    to the caller's response (returned via [`GateOutcome::Ok::warnings`]).
 //!
-//! `bash`, `text_editor.edit`, and `clipboard_write` skip steps 3–5 (they
-//! aren't per-app). They still hit step 6 via class-less sentinels.
+//! `clipboard_write` skips steps 3–5 (it isn't per-app). It still hits
+//! step 6 via class-less sentinels.
 
 use crate::error::ToolError;
 use std::collections::HashMap;
@@ -133,8 +133,8 @@ pub enum ApprovalState {
 }
 
 /// The target of a destructive tool call. Determines what step 3 of the
-/// gate looks up. `Classless` means "this tool is not per-app" (bash,
-/// text_editor.edit, clipboard_write).
+/// gate looks up. `Classless` means "this tool is not per-app"
+/// (clipboard_write today; ADR-0013 removed the other Classless tools).
 #[derive(Debug, Clone)]
 pub enum TargetApp {
     Class(String),

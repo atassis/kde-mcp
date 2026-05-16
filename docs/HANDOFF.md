@@ -29,11 +29,22 @@ cargo test --workspace         # 146+ tests, ~5s
 - `docs/adr/0011-multi-session-lease.md` — the lease that ADR-0012 builds on.
 - `docs/plans/2026-05-16-singleton-daemon-implementation.md` — 8-phase implementation plan (executed in commits `7888c3a` → `242e285`).
 
-**Loose threads:**
+## 2026-05-16 (later): ADR-0013 trimmed the catalogue to 11 logical / 12 wire tools
+
+`bash`, `text_editor_view`, `text_editor_edit`, and `wait` removed. The principle: an MCP tool earns its keep only if it exposes a primitive the host can't reach natively, or collapses a multi-step host-reachable sequence whose response shape carries information the host couldn't otherwise compose. The host's own bash + Read/Edit/Write already cover the four removed surfaces. See `docs/adr/0013-remove-shell-and-file-tools.md`.
+
+Side effects of the removal:
+- Runbook L2.15 (bash PTY parser failure) is moot — the tool that failed is gone.
+- The earlier-today PTY-sentinel fix in `src/tools/bash.rs` was reverted along with the file itself.
+- `tests/integration.rs` lost `bash_pty` and `text_editor` modules.
+- `tests/integration/tools_list.rs::server_advertises_*` now asserts 12 wire names; `no_tool_has_open_world_hint` replaces the bash-specific check.
+- `Cargo.toml` retired `portable-pty` and `strip-ansi-escapes` deps.
+- Spec §6 / §6.0 / §10 / §13 updated; §4.4 hint dropped the "use bash to launch one" clause; §13 module layout no longer lists `src/tools/{bash,text_editor,wait}.rs` or `src/util/pty.rs`.
+
+**Loose threads remaining:**
 1. **Runbook L2.3** still expects `png_base64` in the JSON; the new shape returns an image content block + text metadata. Doc-only fix; should land before the next autonomous-verification run.
-2. **`mcp__kde-mcp__bash` PTY bug** — `stdout` returns the prompt + sentinel, `exit_code` is `null`. Documented in `docs/runbook/runs/2026-05-15-1909/L2.15-bash.json`. Source: `src/tools/bash.rs`. Untouched in May 2026 session.
-3. **Screenshot tool description** could mention the `max_long_edge` sizing trade-off so agents are deliberate (1024 for quick "is X gone" probes; 1280 default for UI element identification).
-4. **Per-session cancel UX** — `SessionScope` already mints per-session cancel tokens; `dispatch_audited` doesn't yet observe them. Tray "Abort" still fires the shared cancel. Polish, not blocking.
+2. **Screenshot tool description** could mention the `max_long_edge` sizing trade-off so agents are deliberate (1024 for quick "is X gone" probes; 1280 default for UI element identification).
+3. **Per-session cancel UX** — `SessionScope` already mints per-session cancel tokens; `dispatch_audited` doesn't yet observe them. Tray "Abort" still fires the shared cancel. Polish, not blocking.
 
 ---
 
