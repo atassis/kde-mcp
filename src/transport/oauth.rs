@@ -40,7 +40,7 @@ use axum::{
     routing::{get, post},
 };
 use parking_lot::RwLock;
-use rand::TryRngCore;
+use rand::TryRng;
 use serde_json::json;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -79,9 +79,9 @@ impl OAuthState {
     /// Mint a fresh 32-byte hex token, record its expiry, return it.
     pub fn issue(&self) -> anyhow::Result<String> {
         let mut bytes = [0u8; TOKEN_BYTES];
-        rand::rngs::OsRng
+        rand::rngs::SysRng
             .try_fill_bytes(&mut bytes)
-            .map_err(|e| anyhow::anyhow!("OsRng::try_fill_bytes: {e}"))?;
+            .map_err(|e| anyhow::anyhow!("SysRng::try_fill_bytes: {e}"))?;
         let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
         let expiry = Instant::now() + TOKEN_TTL;
         self.inner.write().insert(hex.clone(), expiry);

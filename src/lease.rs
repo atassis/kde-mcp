@@ -154,10 +154,9 @@ impl LeaseStore {
         if !self
             .notif_fired
             .swap(true, std::sync::atomic::Ordering::SeqCst)
+            && let Ok(handle) = tokio::runtime::Handle::try_current()
         {
-            if let Ok(handle) = tokio::runtime::Handle::try_current() {
-                handle.spawn(async { crate::notify::notify_lease_acquired("live").await });
-            }
+            handle.spawn(async { crate::notify::notify_lease_acquired("live").await });
             // No runtime → skip notification (e.g., from sync tests).
         }
         Ok(TryOutcome::Acquired)

@@ -33,10 +33,10 @@ pub fn redact(tool: &str, args: Value) -> Value {
     let Value::Object(mut map) = args else {
         return args;
     };
-    if tool == "clipboard_write" {
-        if let Some(content) = map.get_mut("content") {
-            *content = json!({ "sha256": placeholder_hash(content) });
-        }
+    if tool == "clipboard_write"
+        && let Some(content) = map.get_mut("content")
+    {
+        *content = json!({ "sha256": placeholder_hash(content) });
     }
     Value::Object(map)
 }
@@ -52,8 +52,11 @@ fn placeholder_hash(v: &Value) -> String {
     };
     let mut hasher = Sha256::new();
     hasher.update(&s);
+    // sha2 0.11 returns `hybrid_array::Array<u8, _>`, which doesn't impl
+    // `LowerHex` directly — format the bytes ourselves.
     let digest = hasher.finalize();
-    format!("sha256:{digest:x}")
+    let hex: String = digest.iter().map(|b| format!("{b:02x}")).collect();
+    format!("sha256:{hex}")
 }
 
 /// Write a lifecycle event (daemon_start, daemon_idle_stop, session_open,

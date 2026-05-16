@@ -94,10 +94,10 @@ pub async fn request_app_approval(
                     tokio::spawn(async move {
                         let mut map = approvals.lock().await;
                         map.insert(app_for_listener, state);
-                        if matches!(state, ApprovalState::Session) {
-                            if let Some(p) = &store_path {
-                                save_persistent_approvals(p, &map);
-                            }
+                        if matches!(state, ApprovalState::Session)
+                            && let Some(p) = &store_path
+                        {
+                            save_persistent_approvals(p, &map);
                         }
                     });
                 }

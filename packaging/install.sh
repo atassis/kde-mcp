@@ -8,6 +8,7 @@
 #   ./packaging/install.sh --transport=daemon    # force HTTP daemon (ADR-0012)
 #   ./packaging/install.sh --transport=stdio     # force one-stdio-child-per-session
 #   ./packaging/install.sh --with-virtual        # also register virtual-mode entry (stdio only)
+#   ./packaging/install.sh --skip-build          # don't rebuild; reuse the binary at $PREFIX/bin/kde-mcp
 #   ./packaging/install.sh --skip-mcp            # build/install binary only; no Claude config
 #   ./packaging/install.sh --skip-allowlist      # register MCP but don't touch settings.json
 #   ./packaging/install.sh --prefix=/usr/local   # custom install prefix (needs writable dest)
@@ -19,6 +20,7 @@ set -euo pipefail
 PREFIX="${PREFIX:-$HOME/.local}"
 TRANSPORT=""
 WITH_VIRTUAL=0
+SKIP_BUILD=0
 SKIP_MCP=0
 SKIP_ALLOWLIST=0
 
@@ -29,6 +31,7 @@ usage() {
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --with-virtual)    WITH_VIRTUAL=1;     shift ;;
+        --skip-build)      SKIP_BUILD=1;       shift ;;
         --skip-mcp)        SKIP_MCP=1;         shift ;;
         --skip-allowlist)  SKIP_ALLOWLIST=1;   shift ;;
         --prefix=*)        PREFIX="${1#*=}";   shift ;;
@@ -73,15 +76,28 @@ require() {
         exit 1
     }
 }
-require cargo
+[[ $SKIP_BUILD -eq 1 ]] || require cargo
 require python3
 [[ $SKIP_MCP -eq 1 ]] || require claude
 
 BIN="$PREFIX/bin/kde-mcp"
 DESKTOP="$HOME/.local/share/applications/kde-mcp.desktop"
 
-echo "==> building and installing $BIN"
-cargo install --path . --root "$PREFIX" --force
+if [[ $SKIP_BUILD -eq 1 ]]; then
+    if [[ ! -x "$BIN" ]]; then
+        echo "error: --skip-build but $BIN missing or not executable" >&2
+        exit 1
+    fi
+    echo "==> reusing $BIN (--skip-build) — $(stat -c '%y' "$BIN")"
+else
+    # `cargo build --release --locked` (instead of `cargo install`) — respects
+    # Cargo.lock, doesn't re-resolve dependencies, doesn't pull newer crate
+    # versions than tested. Then a single deterministic `install`.
+    echo "==> building (cargo build --release --locked)"
+    cargo build --release --locked
+    echo "==> installing $BIN"
+    install -D -m 0755 target/release/kde-mcp "$BIN"
+fi
 
 echo "==> writing $DESKTOP"
 mkdir -p "$(dirname "$DESKTOP")"

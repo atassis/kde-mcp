@@ -2,7 +2,7 @@
 name = "kde-mcp"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.94"
 description = "MCP server for KDE Plasma 6 Wayland desktop control"
 license = "MIT"
 repository = ""
@@ -43,10 +43,10 @@ atspi          = { version = "=0.30", features = ["tokio"] }
 image          = { version = "0.25", default-features = false, features = ["png"] }
 uuid           = { version = "1.10", features = ["v4", "serde"] }
 futures-util   = "0.3"
-sha2           = "0.10"
+sha2           = "0.11"
 base64         = "0.22"
 regex-lite     = "0.1"
-nix            = { version = "0.29", default-features = false, features = ["fs"] }
+nix            = { version = "0.31", default-features = false, features = ["fs"] }
 tempfile       = "3.10"
 
 # Phase 2 additions:
@@ -54,7 +54,7 @@ reis           = { version = "=0.6.1", features = ["tokio"] }
 
 # Phase 3+ additions (ADR-0013 retired portable-pty + strip-ansi-escapes
 # along with the bash tool):
-toml           = "0.8"
+toml           = "1.1"
 tokio-util     = "0.7"
 
 # Deferral push (2026-05-15):
@@ -67,7 +67,7 @@ parking_lot    = "0.12"
 axum           = "0.8"
 dashmap        = "6.1"
 listenfd       = "1.0"
-rand           = "0.9"
+rand           = "0.10"
 
 [dev-dependencies]
 tempfile       = "3.10"
