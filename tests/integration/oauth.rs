@@ -132,6 +132,12 @@ async fn well_known_authorization_server_metadata() {
         body["registration_endpoint"],
         format!("{issuer}/oauth/register"),
     );
+    // RFC 8414 + Claude Code 2.1.139 Zod validator both require this.
+    assert_eq!(
+        body["authorization_endpoint"],
+        format!("{issuer}/oauth/authorize"),
+        "authorization_endpoint missing or wrong",
+    );
     let grants = body["grant_types_supported"]
         .as_array()
         .expect("grant_types_supported array");
@@ -140,6 +146,22 @@ async fn well_known_authorization_server_metadata() {
             .iter()
             .any(|v| v.as_str() == Some("client_credentials"))
     );
+    let pkce = body["code_challenge_methods_supported"]
+        .as_array()
+        .expect("code_challenge_methods_supported array");
+    assert!(pkce.iter().any(|v| v.as_str() == Some("S256")));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn authorize_endpoint_returns_400_with_unsupported_response_type() {
+    let (_tmp, server) = test_server().await;
+    let (port, _, _) = spawn_daemon(server).await;
+    let resp = reqwest::get(format!("http://127.0.0.1:{port}/oauth/authorize"))
+        .await
+        .expect("GET /oauth/authorize");
+    assert_eq!(resp.status(), 400);
+    let body: serde_json::Value = resp.json().await.expect("json");
+    assert_eq!(body["error"], "unsupported_response_type");
 }
 
 #[tokio::test(flavor = "multi_thread")]

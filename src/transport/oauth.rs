@@ -144,6 +144,12 @@ pub fn router(state: OAuthState) -> Router {
         )
         .route("/oauth/register", post(register_client))
         .route("/oauth/token", post(token_endpoint))
+        // Stub authorization endpoint. RFC 8414 lists
+        // `authorization_endpoint` as required, and strict clients
+        // (Claude Code 2.1.139's Zod validator) reject metadata without
+        // it. We don't support browser-based grants — calling this
+        // endpoint always errors. Its presence is what matters.
+        .route("/oauth/authorize", get(authorize_unsupported))
         .with_state(state)
 }
 
@@ -171,12 +177,35 @@ async fn protected_resource_metadata(State(state): State<OAuthState>) -> Json<se
 async fn authorization_server_metadata(State(state): State<OAuthState>) -> Json<serde_json::Value> {
     Json(json!({
         "issuer": &state.issuer,
+        // `authorization_endpoint` is RFC 8414 required (even when we
+        // only support grants that don't use it). Strict clients —
+        // notably Claude Code 2.1.139's Zod validator — reject the
+        // metadata without it. Points at a stub that always errors.
+        "authorization_endpoint": format!("{}/oauth/authorize", state.issuer),
         "token_endpoint": format!("{}/oauth/token", state.issuer),
         "registration_endpoint": format!("{}/oauth/register", state.issuer),
         "grant_types_supported": ["client_credentials"],
         "token_endpoint_auth_methods_supported": ["none"],
         "response_types_supported": ["token"],
+        // OAuth 2.1 / MCP 2025-11-25 expect PKCE support advertisement.
+        // We don't run the code-grant flow, but advertising the
+        // algorithm keeps strict validators happy.
+        "code_challenge_methods_supported": ["S256"],
     }))
+}
+
+/// Stub for the `authorization_endpoint` slot. We don't support
+/// browser-based grants — only `client_credentials` over the token
+/// endpoint. Returning 400 with the canonical OAuth 2.0 error code
+/// makes the wire behaviour self-documenting.
+async fn authorize_unsupported() -> (StatusCode, Json<serde_json::Value>) {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(json!({
+            "error": "unsupported_response_type",
+            "error_description": "kde-mcp only supports the client_credentials grant; POST /oauth/token",
+        })),
+    )
 }
 
 /// Open registration. We mint an opaque `client_id` and don't track it
