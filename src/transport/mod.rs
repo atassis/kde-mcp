@@ -9,7 +9,7 @@
 
 pub use crate::cli::Transport;
 
-pub mod auth;
 pub mod daemon;
+pub mod oauth;
 pub mod session;
 pub mod stdio;

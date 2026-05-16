@@ -97,10 +97,7 @@ impl KdeMcp {
     /// guard whose `Drop` runs when rmcp finally lets go of this
     /// clone. The daemon uses this to detect real session-end timing
     /// (which the response-return-time middleware was racing past).
-    pub fn with_session_scope(
-        &self,
-        scope: Arc<crate::transport::session::SessionScope>,
-    ) -> Self {
+    pub fn with_session_scope(&self, scope: Arc<crate::transport::session::SessionScope>) -> Self {
         let mut s = self.with_session_id(scope.session_id());
         s._session_scope = Some(scope);
         s
@@ -443,7 +440,6 @@ impl KdeMcp {
         )
         .await)
     }
-
 }
 
 #[tool_handler]

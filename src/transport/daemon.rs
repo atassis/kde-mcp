@@ -9,13 +9,17 @@
 //!     socket mode mean only the owning UID can connect. Same-UID
 //!     processes are inside the threat model already — they could
 //!     drive libei directly without going through kde-mcp.
-//!   - **TCP loopback** (deprecated) — `127.0.0.1:7575`, bearer-token
-//!     auth from `$XDG_RUNTIME_DIR/kde-mcp/token`. Kept for non-
-//!     systemd / non-Wayland deployments and for tunnel-bridge tools.
-//!     Note: clients that respect `HTTPS_PROXY` for loopback URLs
-//!     (Claude Code's HTTP MCP client, in particular) will route the
-//!     request through the proxy and never reach us. Prefer
-//!     `--transport=unix` on KDE-Plasma-Wayland.
+//!   - **TCP loopback** (deprecated) — `127.0.0.1:7575`, OAuth 2.1
+//!     authorization (ADR-0014). The daemon is its own auth server:
+//!     it mints short-lived bearer tokens on demand at
+//!     `/oauth/token` and validates them on `/mcp`. No bearer in
+//!     `~/.claude.json`; Claude Code's OAuth client negotiates
+//!     transparently. Kept for non-systemd / non-Wayland deployments
+//!     and for tunnel-bridge tools. Note: clients that respect
+//!     `HTTPS_PROXY` for loopback URLs (Claude Code's HTTP MCP
+//!     client, in particular) will route the request through the
+//!     proxy and never reach us. Prefer `--transport=unix` on
+//!     KDE-Plasma-Wayland.
 //!
 //! Both listener types pick up an fd from systemd via `LISTEN_FDS`
 //! when present; fall back to direct bind for dev / non-systemd runs.
@@ -69,21 +73,26 @@ struct HealthState {
 /// the socket itself (0600) replace it.
 pub async fn serve_unix(server: KdeMcp) -> Result<()> {
     let listener = pick_unix_listener().await?;
-    serve_with_listener_token_timeout(server, listener, None, IDLE_TIMEOUT).await
+    serve_with_listener_oauth_timeout(server, listener, None, IDLE_TIMEOUT).await
 }
 
-/// Public entry: TCP `127.0.0.1:7575` listener with bearer-token auth.
+/// Public entry: TCP `127.0.0.1:7575` listener with OAuth 2.1
+/// authorization (ADR-0014).
 ///
 /// **Deprecated** for desktop use. Picks up `LISTEN_FDS[0]` if systemd
-/// handed us a TCP socket; falls back to direct bind. Reads (or
-/// generates) the bearer token at `$XDG_RUNTIME_DIR/kde-mcp/token`.
+/// handed us a TCP socket; falls back to direct bind. Builds an
+/// [`OAuthState`] whose issuer URL matches the listener's bound
+/// address, mounts the discovery + token endpoints unauthenticated,
+/// and gates `/mcp` with [`oauth_validate_middleware`].
 pub async fn serve_http(server: KdeMcp) -> Result<()> {
     let listener = pick_tcp_listener().await?;
-    let token_path = crate::transport::auth::default_token_path();
-    let token = crate::transport::auth::ensure_token(&token_path)
-        .with_context(|| format!("ensure_token at {}", token_path.display()))?;
-    tracing::info!(token_path = %token_path.display(), "daemon: bearer token ready");
-    serve_with_listener_token_timeout(server, listener, Some(token), IDLE_TIMEOUT).await
+    let addr = listener
+        .local_addr()
+        .context("TcpListener::local_addr for OAuth issuer")?;
+    let issuer = format!("http://{addr}");
+    let oauth = crate::transport::oauth::OAuthState::new(issuer.clone());
+    tracing::info!(%issuer, "daemon: OAuth issuer ready");
+    serve_with_listener_oauth_timeout(server, listener, Some(oauth), IDLE_TIMEOUT).await
 }
 
 /// Convenience for tests with default idle timeout. The listener is
@@ -105,23 +114,41 @@ where
     L: axum::serve::Listener + Send + 'static,
     L::Addr: std::fmt::Debug + Send,
 {
-    serve_with_listener_token_timeout(server, listener, None, idle).await
+    serve_with_listener_oauth_timeout(server, listener, None, idle).await
 }
 
-/// Common path. `token` is `Some(...)` for the HTTP transport (gates
-/// `/mcp` with `Authorization: Bearer <token>`), `None` for Unix-socket
-/// and test scenarios.
-async fn serve_with_listener_token_timeout<L>(
+/// Same as [`serve_with_listener_and_timeout`] but with the OAuth
+/// authorization layer wired in. Tests use this directly to exercise
+/// the OAuth flow without going through `serve_http`'s TCP-bind path.
+pub async fn serve_with_listener_oauth<L>(
     server: KdeMcp,
     listener: L,
-    token: Option<String>,
+    oauth: crate::transport::oauth::OAuthState,
+) -> Result<()>
+where
+    L: axum::serve::Listener + Send + 'static,
+    L::Addr: std::fmt::Debug + Send,
+{
+    serve_with_listener_oauth_timeout(server, listener, Some(oauth), IDLE_TIMEOUT).await
+}
+
+/// Common path. `oauth` is `Some(...)` for the HTTP transport (mounts
+/// discovery + token endpoints, gates `/mcp` with
+/// [`oauth_validate_middleware`]), `None` for Unix-socket and bare
+/// test scenarios.
+async fn serve_with_listener_oauth_timeout<L>(
+    server: KdeMcp,
+    listener: L,
+    oauth: Option<crate::transport::oauth::OAuthState>,
     idle: Duration,
 ) -> Result<()>
 where
     L: axum::serve::Listener + Send + 'static,
     L::Addr: std::fmt::Debug + Send,
 {
-    use crate::transport::auth::{AuthState, bearer_middleware};
+    use crate::transport::oauth::{
+        oauth_validate_middleware, router as oauth_router, spawn_sweeper,
+    };
     // --- shared state -------------------------------------------------------
     let sessions = Arc::new(AtomicU64::new(0));
     let started_at = Instant::now();
@@ -189,20 +216,28 @@ where
         .route("/healthz", get(healthz))
         .with_state(health_state);
 
+    // --- shutdown token (created early so subsystems can subscribe) -------
+    let stop = CancellationToken::new();
+
     let mcp_router = Router::new().route_service("/mcp", mcp_service);
-    let mcp_router = if let Some(tok) = token {
-        let auth = AuthState { token: tok };
-        mcp_router.layer(axum::middleware::from_fn_with_state(
-            auth,
-            bearer_middleware,
-        ))
+    let (mcp_router, discovery_router) = if let Some(oauth_state) = oauth {
+        let protected = mcp_router.layer(axum::middleware::from_fn_with_state(
+            oauth_state.clone(),
+            oauth_validate_middleware,
+        ));
+        let discovery = oauth_router(oauth_state.clone());
+        // TTL sweeper dies with the daemon's stop token.
+        spawn_sweeper(oauth_state, stop.clone());
+        (protected, Some(discovery))
     } else {
-        mcp_router
+        (mcp_router, None)
     };
-    let app = healthz_router.merge(mcp_router);
+    let mut app = healthz_router.merge(mcp_router);
+    if let Some(discovery) = discovery_router {
+        app = app.merge(discovery);
+    }
 
     // --- shutdown wiring ----------------------------------------------------
-    let stop = CancellationToken::new();
 
     // SIGTERM handler — cancels the stop token to start graceful drain.
     let stop_for_sigterm = stop.clone();

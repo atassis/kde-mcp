@@ -61,11 +61,7 @@ fn placeholder_hash(v: &Value) -> String {
 /// slug for cheap grep / jq filtering. `extra` is merged into the `args`
 /// column.
 impl AuditLog {
-    pub async fn write_event(
-        &self,
-        event: &'static str,
-        extra: Value,
-    ) -> std::io::Result<()> {
+    pub async fn write_event(&self, event: &'static str, extra: Value) -> std::io::Result<()> {
         self.write(AuditRecord {
             ts: String::new(),
             mode: "live",
@@ -254,7 +250,10 @@ mod tests {
 
     #[test]
     fn unrelated_tools_pass_through_verbatim() {
-        let r = redact("mouse", json!({"action": "click", "coordinate": [100, 200]}));
+        let r = redact(
+            "mouse",
+            json!({"action": "click", "coordinate": [100, 200]}),
+        );
         assert_eq!(r["action"], "click");
         assert_eq!(r["coordinate"], json!([100, 200]));
     }

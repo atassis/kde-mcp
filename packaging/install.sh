@@ -137,7 +137,9 @@ case "$TRANSPORT" in
     systemctl --user stop kde-mcp.service kde-mcp.socket 2>/dev/null || true
     systemctl --user stop kde-mcp-http.service 2>/dev/null || true
     systemctl --user enable --now kde-mcp-http.socket
-    # Force-spawn the service so the daemon mints the bearer token.
+    # Wait for /healthz so the next stage sees a live daemon. Post-
+    # ADR-0014 there's no bearer-token file to wait on — auth happens
+    # at MCP-connect time via OAuth.
     for _ in 1 2 3 4 5; do
         if curl -fsS http://127.0.0.1:7575/healthz >/dev/null 2>&1; then
             break
@@ -149,6 +151,8 @@ esac
 
 if [[ $SKIP_MCP -eq 0 ]]; then
     echo "==> registering kde-mcp at user scope (transport=$TRANSPORT)"
+    # Idempotent remove flushes any pre-ADR-0014 Authorization header
+    # left in ~/.claude.json by previous installs.
     claude mcp remove --scope user kde-mcp >/dev/null 2>&1 || true
     case "$TRANSPORT" in
       unix)
@@ -156,15 +160,10 @@ if [[ $SKIP_MCP -eq 0 ]]; then
         claude mcp add --transport http --scope user kde-mcp "unix://${SOCKET_PATH}"
         ;;
       http)
-        TOKEN_FILE="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/kde-mcp/token"
-        if [[ ! -f "$TOKEN_FILE" ]]; then
-            echo "warning: HTTP token file missing at $TOKEN_FILE — start the daemon" >&2
-            echo "  manually with --transport=http to mint it, then re-run install." >&2
-            exit 1
-        fi
-        TOKEN="$(cat "$TOKEN_FILE")"
-        claude mcp add --transport http --scope user kde-mcp http://127.0.0.1:7575/mcp \
-            --header "Authorization: Bearer $TOKEN"
+        # Post-ADR-0014: no Authorization header. Claude Code's OAuth
+        # client discovers the auth server via /.well-known/* and
+        # negotiates a bearer at connect time.
+        claude mcp add --transport http --scope user kde-mcp http://127.0.0.1:7575/mcp
         ;;
       stdio)
         register_stdio() {

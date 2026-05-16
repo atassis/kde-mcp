@@ -172,16 +172,15 @@ impl Drop for SessionScope {
         *self.last_active_at.lock() = Instant::now();
         let audit = self.audit.clone();
         // `Handle::spawn` is safe to call from a sync Drop as long as the
-        // runtime isn't shutting down. We swallow JoinHandle deliberately;
-        // missing a session_close audit at process exit is acceptable.
-        let _ = self.rt.spawn(async move {
+        // runtime isn't shutting down. We swallow JoinHandle deliberately
+        // (drop, not let _) so clippy's `let_underscore_future` lint
+        // doesn't complain — missing a `session_close` audit at process
+        // exit is acceptable.
+        drop(self.rt.spawn(async move {
             let _ = audit
-                .write_event(
-                    "session_close",
-                    json!({"session_id": sid.to_string()}),
-                )
+                .write_event("session_close", json!({"session_id": sid.to_string()}))
                 .await;
-        });
+        }));
     }
 }
 

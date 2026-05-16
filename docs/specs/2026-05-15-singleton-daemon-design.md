@@ -1,8 +1,10 @@
 # Singleton daemon with HTTP transport — design
 
-**Status:** Draft
+**Status:** Draft (authorization section superseded by [[adr/0014-oauth-replaces-static-bearer]] on 2026-05-16; everything else still applies)
 **Date:** 2026-05-15
 **Author:** atassis
+
+> **2026-05-16 update.** The §"Auth" passages below (bearer token, `$XDG_RUNTIME_DIR/kde-mcp/token`, `Authorization: Bearer` in `~/.claude.json`) are retired by ADR-0014. The daemon is now its own OAuth 2.1 authorization server; `~/.claude.json` carries the URL only; the bearer is negotiated at MCP-connect time. The transport, lifecycle, idle-stop, lease, and audit sections are unchanged.
 **Audience:** developers implementing the daemon mode; future contributors deciding whether to extend it.
 
 ---

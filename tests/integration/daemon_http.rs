@@ -72,7 +72,10 @@ async fn healthz_reports_ok_without_auth() {
         .await
         .expect("json");
     assert_eq!(body["ok"], true);
-    assert!(body["uptime_s"].as_u64().is_some(), "uptime_s should be a u64: {body}");
+    assert!(
+        body["uptime_s"].as_u64().is_some(),
+        "uptime_s should be a u64: {body}"
+    );
     assert_eq!(body["sessions"], 0);
 }
 
@@ -89,11 +92,7 @@ async fn http_initialize_returns_serverinfo() {
         .send()
         .await
         .expect("POST /mcp");
-    assert!(
-        resp.status().is_success(),
-        "status={}",
-        resp.status(),
-    );
+    assert!(resp.status().is_success(), "status={}", resp.status(),);
     let text = resp.text().await.expect("text body");
     assert!(
         text.contains("\"name\":\"kde-mcp\"") || text.contains("\"name\": \"kde-mcp\""),
@@ -120,7 +119,10 @@ async fn http_initialize_bumps_session_counter() {
         .json()
         .await
         .expect("json");
-    assert_eq!(body["sessions"], 1, "expected sessions=1 after initialize: {body}");
+    assert_eq!(
+        body["sessions"], 1,
+        "expected sessions=1 after initialize: {body}"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -162,11 +164,13 @@ async fn http_tool_call_audit_contains_session_id() {
 
     // 3. Audit writes are async-flushed; give it a moment.
     tokio::time::sleep(Duration::from_millis(200)).await;
-    let body = tokio::fs::read_to_string(&audit_path).await.expect("read audit");
+    let body = tokio::fs::read_to_string(&audit_path)
+        .await
+        .expect("read audit");
     let observe_line = body
         .lines()
         .find(|l| l.contains("\"tool\":\"observe\""))
-        .expect(&format!("audit must contain an observe entry; full body:\n{body}"));
+        .unwrap_or_else(|| panic!("audit must contain an observe entry; full body:\n{body}"));
     let entry: serde_json::Value = serde_json::from_str(observe_line).expect("audit json");
     assert!(
         entry["session_id"].as_str().is_some(),

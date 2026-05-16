@@ -1,4 +1,4 @@
-use crate::policy::{save_persistent_approvals, ApprovalState};
+use crate::policy::{ApprovalState, save_persistent_approvals};
 use notify_rust::{ActionResponse, Hint, Notification, NotificationHandle, Urgency};
 use std::collections::HashMap;
 use std::path::PathBuf;
