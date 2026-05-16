@@ -4,6 +4,39 @@ A snapshot of project state. Read this first if you are returning to the project
 
 ---
 
+## 2026-05-16 status (latest)
+
+The MVP shipped in May 2026. ADR-0011 (per-session lease) and ADR-0012 (singleton daemon over HTTP) both landed. Three transports in the binary; only the HTTP one is auto-deployed. The screenshot tool returns MCP image content — Claude Code's vision pathway picks it up directly, no base64-in-text round-trip.
+
+```sh
+cat CLAUDE.md                  # project conventions
+git log --oneline | head -25   # 16 commits since b49248e; ADR-0012 implementation
+systemctl --user is-active kde-mcp-http.service   # should be active (or socket-activatable)
+curl -fsS http://127.0.0.1:7575/healthz | jq .    # daemon liveness
+cargo test --workspace         # 146+ tests, ~5s
+```
+
+**Current deployment:**
+- Binary: `~/.local/bin/kde-mcp`, built from this tree at HEAD.
+- Daemon: systemd-user `kde-mcp-http.{socket,service}` listening on `127.0.0.1:7575`. Bearer-token auth on `/mcp`, token in `$XDG_RUNTIME_DIR/kde-mcp/token`. Idle-stops after 10 min of zero open sessions; socket-activated on next connection.
+- Claude Code MCP entry: `http://127.0.0.1:7575/mcp` with `Authorization: Bearer <token>`. **Requires `NO_PROXY=127.0.0.1,localhost,::1` in the Claude Code shell env** (Claude Code 2.1.x's HTTP MCP client routes loopback through HTTPS_PROXY otherwise).
+- Unix-socket transport (`kde-mcp.{socket,service}`) is implemented and tested but not auto-enabled — Claude Code 2.1.x refuses `unix://` URLs at the fetch layer. Flip the install.sh default to `unix` when upstream adds support.
+
+**Reference reading for understanding the current state:**
+
+- `docs/specs/2026-05-15-singleton-daemon-design.md` — full design for the daemon mode.
+- `docs/adr/0012-singleton-daemon-http.md` — one-page rationale (Accepted 2026-05-16).
+- `docs/adr/0011-multi-session-lease.md` — the lease that ADR-0012 builds on.
+- `docs/plans/2026-05-16-singleton-daemon-implementation.md` — 8-phase implementation plan (executed in commits `7888c3a` → `242e285`).
+
+**Loose threads:**
+1. **Runbook L2.3** still expects `png_base64` in the JSON; the new shape returns an image content block + text metadata. Doc-only fix; should land before the next autonomous-verification run.
+2. **`mcp__kde-mcp__bash` PTY bug** — `stdout` returns the prompt + sentinel, `exit_code` is `null`. Documented in `docs/runbook/runs/2026-05-15-1909/L2.15-bash.json`. Source: `src/tools/bash.rs`. Untouched in May 2026 session.
+3. **Screenshot tool description** could mention the `max_long_edge` sizing trade-off so agents are deliberate (1024 for quick "is X gone" probes; 1280 default for UI element identification).
+4. **Per-session cancel UX** — `SessionScope` already mints per-session cancel tokens; `dispatch_audited` doesn't yet observe them. Tray "Abort" still fires the shared cancel. Polish, not blocking.
+
+---
+
 ## TL;DR — what to do first in a fresh session
 
 ```sh
@@ -11,7 +44,7 @@ cat CLAUDE.md             # project conventions (incl. global ones at ~/.claude/
 cat docs/HANDOFF.md       # this file
 git log --oneline | head -20
 git tag -l                # phase-0 should be present (phase-1 not yet tagged)
-cargo test --workspace    # 57 tests; should all pass in <5 s after build
+cargo test --workspace    # 146+ tests; should all pass in <5 s after build
 ```
 
 **Autonomous verification:** A fresh Claude Code session can run end-to-end tests by following `docs/runbook/AUTONOMOUS-VERIFICATION.md`. The runbook covers all 16 tools, six product scenarios (S1–S6), and 4 of 6 bug-bounty probes. Per-run artefacts land in `docs/runbook/runs/<id>/` (gitignored). Auto-fix is mechanical only via `docs/runbook/KNOWN-FIXES.md` — no AI debug loop. **Prerequisite:** `./packaging/install.sh` must have been run at least once.
