@@ -181,7 +181,9 @@ This isn't a code change. Open this plan file, find the placeholder below, and r
 2. The current `AuditRecord` struct shape.
 3. Where new fields would slot in without breaking serde.
 
-<<AUDIT-NOTES>>
+- **Existing timing fields:** one — `duration_ms: Option<u64>` (line 17) with `#[serde(skip_serializing_if = "Option::is_none")]`. Coarse wall-clock total only; no phase breakdown. Task 3's `AuditTimings` is additive and doesn't conflict — `duration_ms` and `timings` can coexist (the analyzer will prefer `timings.t_audit_written_ns` when present, fall back to `duration_ms` otherwise; no Rust-side rename needed). No `Deserialize` derive on `AuditRecord` today (only `#[derive(Debug, Serialize)]` at line 9) and no `Default` impl — Task 3 must add both (`Deserialize` for the round-trip test; `Default` for the `default_for_test()` helper, OR hand-roll `default_for_test()` without the `..Default::default()` shorthand). All current Option fields use `skip_serializing_if = "Option::is_none"`, so adding `timings: Option<AuditTimings>` with the same attribute preserves wire compatibility for old readers and old records.
+- **Current `AuditRecord` shape (verbatim field list):** `ts: String`, `mode: &'static str`, `tool: String`, `args: Value`, `ok: bool`, `duration_ms: Option<u64>`, `error: Option<Value>`, `vision_fallback: Option<bool>`, `session_id: Option<String>`. Constructed inline at call sites (no `AuditRecord::new` constructor) — confirmed by `impl AuditLog::write_event` at line 67 and the test fixtures at lines 175-185 and 211-222, both of which list every field explicitly. The `&'static str` on `mode` is the only non-owned field and would block a naive `#[derive(Default)]` — Task 3 should hand-write `default_for_test()` rather than relying on `Default`.
+- **Where new fields slot in without breaking serde:** append `timings: Option<AuditTimings>` as the last field of `AuditRecord` (after `session_id`, line 25) with `#[serde(default, skip_serializing_if = "Option::is_none")]`. Define `AuditTimings` immediately above `AuditRecord` (after the `use` block, before line 9). Every existing call-site that constructs `AuditRecord` by listing all fields (lines 67-80 in `write_event`, lines 175-185 and 211-222 in tests) must add `timings: None` — three sites total inside `src/audit.rs`; `dispatch_audited` in `src/server.rs` is the fourth (handled by Task 4). `serde(default)` on the new field ensures old JSONL records on disk still deserialize once `Deserialize` is added.
 
 (If the placeholder is already filled by a prior pass, leave it.)
 
@@ -240,9 +242,21 @@ Append to the `#[cfg(test)] mod tests` block at the bottom of `src/audit.rs`:
 Run: `cargo test --lib audit::tests::audit_record_round_trips`
 Expected: FAIL — `AuditTimings` and/or `timings` field don't exist.
 
-- [ ] **Step 3: Add `AuditTimings` struct and `timings` field**
+- [ ] **Step 3: Add `AuditTimings` struct, `timings` field, and update derives**
 
-In `src/audit.rs`, add near the existing `AuditRecord`:
+Per the Task 2 audit, `AuditRecord` derives only `#[derive(Debug, Serialize)]` today, and the `mode` field is `&'static str` (which means a naive `Default` would set `mode = ""`, violating the live/dry invariant). The plan is therefore:
+
+(a) Add `Deserialize` to the derive macro on `AuditRecord` — the round-trip tests need it.
+
+(b) Do NOT add `Default` to `AuditRecord`. Hand-write `default_for_test()` listing every field explicitly.
+
+(c) Add the new `AuditTimings` struct above `AuditRecord`.
+
+(d) Add the `timings` field as the last field on `AuditRecord`.
+
+(e) Update the three existing exhaustive `AuditRecord { ... }` constructions inside `src/audit.rs` to include `timings: None` (these were enumerated by Task 2: `AuditLog::write_event` ~line 67-80, plus two test fixtures around lines 175-185 and 211-222 — verify the current line numbers when editing).
+
+In `src/audit.rs`, add near the existing `AuditRecord` (above it, after the `use` block):
 
 ```rust
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -256,31 +270,44 @@ pub struct AuditTimings {
 }
 ```
 
-Then add to `AuditRecord`:
+Change `#[derive(Debug, Serialize)]` on `AuditRecord` to:
+
+```rust
+#[derive(Debug, Serialize, Deserialize)]
+```
+
+Add the field at the END of the struct (after `session_id`):
 
 ```rust
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timings: Option<AuditTimings>,
 ```
 
-If `AuditRecord` doesn't already implement a test-only default, add at the bottom of the module (gated on `cfg(test)`):
+Update every exhaustive constructor of `AuditRecord` in `src/audit.rs` to include `timings: None`. Confirm the exact set with `grep -n "AuditRecord {" src/audit.rs` before editing.
+
+Add the test-only helper at the bottom of the module:
 
 ```rust
 #[cfg(test)]
 impl AuditRecord {
     pub(crate) fn default_for_test() -> Self {
-        // populate with minimal valid values — mirror an existing test
-        // helper if one is in the module already; otherwise use the
-        // field defaults that satisfy the type system.
         Self {
-            // <fill from the actual struct, do NOT guess from memory>
-            ..Default::default()
+            ts: "1970-01-01T00:00:00Z".into(),
+            mode: "live",
+            tool: "test_tool".into(),
+            args: serde_json::Value::Null,
+            ok: true,
+            duration_ms: None,
+            error: None,
+            vision_fallback: None,
+            session_id: None,
+            timings: None,
         }
     }
 }
 ```
 
-If `AuditRecord` does not derive `Default`, add a `Default` derive (it's safe — all fields are owned types that already derive Default, or wrap them in Option).
+(If any existing test fixture in the module already constructs a "default" record, mirror its values; the helper above mirrors `write_event`'s defaults, which is the canonical baseline.)
 
 - [ ] **Step 4: Run test to verify it passes**
 
