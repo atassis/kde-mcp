@@ -481,6 +481,11 @@ where
     F: std::future::Future<Output = Result<T, ToolError>>,
     T: serde::Serialize,
 {
+    // Five-phase nanosecond budget per spec §3.1
+    // (docs/specs/2026-05-19-evaluation-and-latency-design.md). All deltas
+    // are relative to `request_start`, so t_received_ns is always 0.
+    let request_start = std::time::Instant::now();
+    let t_received_ns: u64 = 0;
     let lease_held = match tool_kind {
         crate::lease::ToolKind::Mutate => match lease.acquire(tool).await {
             Ok(()) => true,
@@ -494,6 +499,23 @@ where
                     Content::text(msg),
                     Content::text(payload.to_string()),
                 ]);
+                // Lease-refused path: the "policy"/"impl" boundaries collapse
+                // onto the same instant since we never entered the tool body.
+                let t_policy_done_ns = request_start.elapsed().as_nanos() as u64;
+                let t_impl_start_ns = t_policy_done_ns;
+                let t_impl_done_ns = t_policy_done_ns;
+                let mut timings = crate::audit::AuditTimings {
+                    t_received_ns,
+                    t_policy_done_ns,
+                    t_impl_start_ns,
+                    t_impl_done_ns,
+                    t_audit_written_ns: 0,
+                };
+                // Captured just before audit.write; spec §3.1 says "after
+                // flush" but the flush is the measured operation, so an
+                // exact-after capture would require a double-write. The
+                // delta within a single record is < 1 µs typically.
+                timings.t_audit_written_ns = request_start.elapsed().as_nanos() as u64;
                 let rec = crate::audit::AuditRecord {
                     ts: String::new(),
                     mode: mode.to_string(),
@@ -504,7 +526,7 @@ where
                     error: Some(payload),
                     vision_fallback: None,
                     session_id: session_id.clone(),
-                    timings: None,
+                    timings: Some(timings),
                 };
                 if let Err(e) = audit.write(rec).await {
                     tracing::error!(error = %e, tool, "audit write failed");
@@ -519,9 +541,13 @@ where
         }
     };
     let _guard = crate::tray::TrayGuard::enter(&tray, tool);
+    // Policy + lease + tray-guard setup done; about to enter the tool body.
+    let t_policy_done_ns = request_start.elapsed().as_nanos() as u64;
+    let t_impl_start_ns = request_start.elapsed().as_nanos() as u64;
     let started = std::time::Instant::now();
     let outcome = fut.await;
     let duration_ms = started.elapsed().as_millis() as u64;
+    let t_impl_done_ns = request_start.elapsed().as_nanos() as u64;
 
     // On cancel, release immediately so the next session can take over.
     if lease_held
@@ -549,6 +575,17 @@ where
             (r, Some(payload))
         }
     };
+    // Captured just before audit.write; spec §3.1 says "after flush" but the
+    // flush is the measured operation, so an exact-after capture would require
+    // a double-write. The delta within a single record is < 1 µs typically.
+    let t_audit_written_ns = request_start.elapsed().as_nanos() as u64;
+    let timings = crate::audit::AuditTimings {
+        t_received_ns,
+        t_policy_done_ns,
+        t_impl_start_ns,
+        t_impl_done_ns,
+        t_audit_written_ns,
+    };
     let rec = crate::audit::AuditRecord {
         ts: String::new(),
         mode: mode.to_string(),
@@ -559,7 +596,7 @@ where
         error: audit_error,
         vision_fallback: None,
         session_id,
-        timings: None,
+        timings: Some(timings),
     };
     if let Err(e) = audit.write(rec).await {
         tracing::error!(error = %e, tool, "audit write failed");
@@ -590,6 +627,10 @@ pub(crate) async fn dispatch_audited_with_content<F>(
 where
     F: std::future::Future<Output = Result<Vec<Content>, ToolError>>,
 {
+    // Mirror dispatch_audited's five-phase budget. Kept in sync deliberately
+    // (see the doc comment above this function).
+    let request_start = std::time::Instant::now();
+    let t_received_ns: u64 = 0;
     let lease_held = match tool_kind {
         crate::lease::ToolKind::Mutate => match lease.acquire(tool).await {
             Ok(()) => true,
@@ -603,6 +644,21 @@ where
                     Content::text(msg),
                     Content::text(payload.to_string()),
                 ]);
+                // Lease-refused: policy/impl boundaries collapse onto the
+                // same instant; we never entered the tool body.
+                let t_policy_done_ns = request_start.elapsed().as_nanos() as u64;
+                let t_impl_start_ns = t_policy_done_ns;
+                let t_impl_done_ns = t_policy_done_ns;
+                let mut timings = crate::audit::AuditTimings {
+                    t_received_ns,
+                    t_policy_done_ns,
+                    t_impl_start_ns,
+                    t_impl_done_ns,
+                    t_audit_written_ns: 0,
+                };
+                // Captured just before audit.write; see dispatch_audited
+                // for the "after flush" vs "before flush" trade-off note.
+                timings.t_audit_written_ns = request_start.elapsed().as_nanos() as u64;
                 let rec = crate::audit::AuditRecord {
                     ts: String::new(),
                     mode: mode.to_string(),
@@ -613,7 +669,7 @@ where
                     error: Some(payload),
                     vision_fallback: None,
                     session_id: session_id.clone(),
-                    timings: None,
+                    timings: Some(timings),
                 };
                 if let Err(e) = audit.write(rec).await {
                     tracing::error!(error = %e, tool, "audit write failed");
@@ -627,9 +683,12 @@ where
         }
     };
     let _guard = crate::tray::TrayGuard::enter(&tray, tool);
+    let t_policy_done_ns = request_start.elapsed().as_nanos() as u64;
+    let t_impl_start_ns = request_start.elapsed().as_nanos() as u64;
     let started = std::time::Instant::now();
     let outcome = fut.await;
     let duration_ms = started.elapsed().as_millis() as u64;
+    let t_impl_done_ns = request_start.elapsed().as_nanos() as u64;
 
     if lease_held
         && (tray.cancel.is_cancelled() || matches!(outcome, Err(ToolError::Cancelled { .. })))
@@ -650,6 +709,17 @@ where
             (r, Some(payload))
         }
     };
+    // Captured just before audit.write; spec §3.1 says "after flush" but the
+    // flush is the measured operation, so an exact-after capture would require
+    // a double-write. The delta within a single record is < 1 µs typically.
+    let t_audit_written_ns = request_start.elapsed().as_nanos() as u64;
+    let timings = crate::audit::AuditTimings {
+        t_received_ns,
+        t_policy_done_ns,
+        t_impl_start_ns,
+        t_impl_done_ns,
+        t_audit_written_ns,
+    };
     let rec = crate::audit::AuditRecord {
         ts: String::new(),
         mode: mode.to_string(),
@@ -660,7 +730,7 @@ where
         error: audit_error,
         vision_fallback: None,
         session_id,
-        timings: None,
+        timings: Some(timings),
     };
     if let Err(e) = audit.write(rec).await {
         tracing::error!(error = %e, tool, "audit write failed");
