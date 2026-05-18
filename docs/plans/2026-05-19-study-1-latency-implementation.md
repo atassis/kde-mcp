@@ -798,7 +798,11 @@ export function percentile(xs: number[], p: number): number {
 }
 
 function nsToMs(ns: number): number {
-  return Math.round(ns / 1_000_000);
+  // Math.floor (not round) to match Prometheus-style "X ms or less" bucket
+  // semantics; also reconciles with the test fixture which sets totals at
+  // half-ms (e.g. 20.5 ms), where Math.round would yield 21 vs the test's
+  // asserted 20.
+  return Math.floor(ns / 1_000_000);
 }
 
 export function aggregate(records: AuditRecord[]): Map<string, ToolStats> {
