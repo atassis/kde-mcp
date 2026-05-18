@@ -26,7 +26,7 @@ pub enum RefError {
 
 /// Opaque-ref store for spec §4.5 poka-yoke. Refs are minted by observation
 /// tools (Phase 1) and consumed by action tools that take `element_ref` /
-/// `window_ref`. The TTL bounds how long a fabricated ref can collide with a
+/// `window_uuid`. The TTL bounds how long a fabricated ref can collide with a
 /// real one, but the primary guarantee is structural: tool schemas don't
 /// accept anything but a ref minted by this store.
 pub struct RefStore {

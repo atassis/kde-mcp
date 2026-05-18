@@ -361,7 +361,7 @@ impl KdeMcp {
     }
 
     #[tool(
-        description = "Focus/minimise/maximise/close a window by ref.",
+        description = "Mutate window state by uuid. Actions: focus | minimize | maximize | restore | close | move | resize. move/resize require geometry=[x,y,w,h]; other actions reject geometry.",
         annotations(destructive_hint = true)
     )]
     async fn window_control(

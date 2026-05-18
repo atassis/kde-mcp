@@ -49,6 +49,7 @@ Side effects of the removal:
 1. **Runbook L2.3** still expects `png_base64` in the JSON; the new shape returns an image content block + text metadata. Doc-only fix; should land before the next autonomous-verification run.
 2. **Screenshot tool description** could mention the `max_long_edge` sizing trade-off so agents are deliberate (1024 for quick "is X gone" probes; 1280 default for UI element identification).
 3. **Per-session cancel UX** — `SessionScope` already mints per-session cancel tokens; `dispatch_audited` doesn't yet observe them. Tray "Abort" still fires the shared cancel. Polish, not blocking.
+4. ~~**`window_control action=move` not implemented**~~ — landed 2026-05-18 (post-S5-fail). `src/tools/window.rs::window_control` now routes `focus | minimize | maximize | restore | close | move | resize` via `parse_action()`; `move`/`resize` accept `geometry: [x, y, w, h]` and roundtrip through a KWin-script `frameGeometry = Qt.rect(...)`. The wire param was also renamed from `window_ref` to `window_uuid` to match spec §6.4 and the other window tools. Poka-yoke (§4.5) enforced: geometry is rejected on focus/minimize/maximize/restore/close (no silent drop). Validation extracted into a pure `parse_action()` with eight unit tests. The S5 scenario doc at `docs/runbook/scenarios/S5-window-management.md` already uses the new `window_uuid` + `geometry` shape — next autonomous run should reach S5 ✅.
 
 ---
 

@@ -67,8 +67,57 @@ pub struct WindowQueryResponse {
 #[derive(Debug, Deserialize, JsonSchema, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub struct WindowControlArgs {
-    pub window_ref: String,
+    pub window_uuid: String,
     pub action: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub geometry: Option<[i32; 4]>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum WindowAction {
+    Focus,
+    Minimize,
+    Maximize,
+    Restore,
+    Close,
+    Move([i32; 4]),
+    Resize([i32; 4]),
+}
+
+/// Validate the (action, geometry) pair from the wire and lift it into a
+/// strongly-typed `WindowAction`.
+///
+/// Why: per spec §4.5 (poka-yoke), invalid combinations — move/resize without
+/// geometry, or geometry on a non-spatial action — must surface as errors, not
+/// silent no-ops the agent will mistake for success.
+pub(crate) fn parse_action(
+    action: &str,
+    geometry: Option<[i32; 4]>,
+) -> Result<WindowAction, ToolError> {
+    let normalised = action.to_ascii_lowercase();
+    match (normalised.as_str(), geometry) {
+        ("move", Some(g)) => Ok(WindowAction::Move(g)),
+        ("move", None) => Err(ToolError::UnsupportedRegion {
+            reason: "geometry [x, y, w, h] required for action=move".into(),
+        }),
+        ("resize", Some(g)) => Ok(WindowAction::Resize(g)),
+        ("resize", None) => Err(ToolError::UnsupportedRegion {
+            reason: "geometry [x, y, w, h] required for action=resize".into(),
+        }),
+        (a @ ("focus" | "minimize" | "maximize" | "restore" | "close"), Some(_)) => {
+            Err(ToolError::UnsupportedRegion {
+                reason: format!("geometry is only valid for move/resize, not action={a}"),
+            })
+        }
+        ("focus", None) => Ok(WindowAction::Focus),
+        ("minimize", None) => Ok(WindowAction::Minimize),
+        ("maximize", None) => Ok(WindowAction::Maximize),
+        ("restore", None) => Ok(WindowAction::Restore),
+        ("close", None) => Ok(WindowAction::Close),
+        (other, _) => Err(ToolError::UnsupportedRegion {
+            reason: format!("unknown window_control action: {other}"),
+        }),
+    }
 }
 
 #[derive(Debug, Default, Serialize, JsonSchema)]
@@ -266,17 +315,19 @@ pub async fn window_control(
     state: &KdeMcp,
     args: WindowControlArgs,
 ) -> Result<WindowControlResponse, ToolError> {
+    let action = parse_action(&args.action, args.geometry)?;
+
     // Resolve our opaque ref → KWin internalId UUID.
     let meta = state
         .refs
-        .resolve(&args.window_ref)
+        .resolve(&args.window_uuid)
         .await
         .map_err(|_| ToolError::StaleHandle {
-            ref_id: args.window_ref.clone(),
+            ref_id: args.window_uuid.clone(),
         })?;
     if meta.kind != crate::refs::RefKind::Window {
         return Err(ToolError::UnsupportedRegion {
-            reason: format!("ref {} is not a window", args.window_ref),
+            reason: format!("ref {} is not a window", args.window_uuid),
         });
     }
     let kwin_uuid = meta.payload.clone();
@@ -291,28 +342,25 @@ pub async fn window_control(
         )
         .await?;
 
-    let action = args.action.to_ascii_lowercase();
-    let body = match action.as_str() {
-        "focus" => format!(
+    let body = match action {
+        WindowAction::Focus => format!(
             r#"var ws = workspace; var list = ws.windowList(); for (var i=0;i<list.length;i++) {{ if (list[i].internalId && list[i].internalId.toString() === "{kwin_uuid}") {{ ws.activeWindow = list[i]; break; }} }} return {{ok: true}};"#
         ),
-        "minimize" => format!(
+        WindowAction::Minimize => format!(
             r#"var ws = workspace; var list = ws.windowList(); for (var i=0;i<list.length;i++) {{ if (list[i].internalId && list[i].internalId.toString() === "{kwin_uuid}") {{ list[i].minimized = true; break; }} }} return {{ok: true}};"#
         ),
-        "maximize" => format!(
+        WindowAction::Maximize => format!(
             r#"var ws = workspace; var list = ws.windowList(); for (var i=0;i<list.length;i++) {{ if (list[i].internalId && list[i].internalId.toString() === "{kwin_uuid}") {{ list[i].setMaximize(true, true); break; }} }} return {{ok: true}};"#
         ),
-        "restore" => format!(
+        WindowAction::Restore => format!(
             r#"var ws = workspace; var list = ws.windowList(); for (var i=0;i<list.length;i++) {{ if (list[i].internalId && list[i].internalId.toString() === "{kwin_uuid}") {{ list[i].minimized = false; list[i].setMaximize(false, false); break; }} }} return {{ok: true}};"#
         ),
-        "close" => format!(
+        WindowAction::Close => format!(
             r#"var ws = workspace; var list = ws.windowList(); for (var i=0;i<list.length;i++) {{ if (list[i].internalId && list[i].internalId.toString() === "{kwin_uuid}") {{ list[i].closeWindow(); break; }} }} return {{ok: true}};"#
         ),
-        other => {
-            return Err(ToolError::UnsupportedRegion {
-                reason: format!("unknown window_control action: {other}"),
-            });
-        }
+        WindowAction::Move([x, y, w, h]) | WindowAction::Resize([x, y, w, h]) => format!(
+            r#"var ws = workspace; var list = ws.windowList(); for (var i=0;i<list.length;i++) {{ if (list[i].internalId && list[i].internalId.toString() === "{kwin_uuid}") {{ list[i].frameGeometry = Qt.rect({x}, {y}, {w}, {h}); break; }} }} return {{ok: true}};"#
+        ),
     };
     let _ =
         crate::kwin::scripting::run_script(&state.bus, &body, std::time::Duration::from_secs(2))
@@ -362,5 +410,69 @@ mod tests {
         let entries = parse_entries(&raw).unwrap();
         assert_eq!(entries[0].geometry, Some([10, 20, 300, 400]));
         assert_eq!(entries[0].pid, Some(1));
+    }
+
+    #[test]
+    fn window_control_args_accept_window_uuid_action_geometry() {
+        let v = json!({
+            "window_uuid": "r#1",
+            "action": "move",
+            "geometry": [10, 20, 300, 400],
+        });
+        let args: WindowControlArgs = serde_json::from_value(v).unwrap();
+        assert_eq!(args.window_uuid, "r#1");
+        assert_eq!(args.action, "move");
+        assert_eq!(args.geometry, Some([10, 20, 300, 400]));
+    }
+
+    #[test]
+    fn parse_action_move_with_geometry_ok() {
+        let a = parse_action("move", Some([10, 20, 300, 400])).unwrap();
+        assert_eq!(a, WindowAction::Move([10, 20, 300, 400]));
+    }
+
+    #[test]
+    fn parse_action_move_without_geometry_errors() {
+        let err = parse_action("move", None).unwrap_err();
+        assert!(
+            matches!(err, ToolError::UnsupportedRegion { ref reason } if reason.contains("geometry") && reason.contains("move"))
+        );
+    }
+
+    #[test]
+    fn parse_action_resize_with_geometry_ok() {
+        let a = parse_action("resize", Some([0, 0, 800, 600])).unwrap();
+        assert_eq!(a, WindowAction::Resize([0, 0, 800, 600]));
+    }
+
+    #[test]
+    fn parse_action_resize_without_geometry_errors() {
+        let err = parse_action("resize", None).unwrap_err();
+        assert!(
+            matches!(err, ToolError::UnsupportedRegion { ref reason } if reason.contains("geometry") && reason.contains("resize"))
+        );
+    }
+
+    #[test]
+    fn parse_action_focus_with_extra_geometry_errors() {
+        // Poka-yoke (§4.5): geometry on a non-move/resize action should not
+        // silently be ignored — the agent thinks the move happened. Reject.
+        let err = parse_action("focus", Some([0, 0, 100, 100])).unwrap_err();
+        assert!(
+            matches!(err, ToolError::UnsupportedRegion { ref reason } if reason.contains("geometry") && reason.contains("focus"))
+        );
+    }
+
+    #[test]
+    fn parse_action_focus_ok() {
+        assert_eq!(parse_action("focus", None).unwrap(), WindowAction::Focus);
+    }
+
+    #[test]
+    fn parse_action_unknown_errors() {
+        let err = parse_action("bogus", None).unwrap_err();
+        assert!(
+            matches!(err, ToolError::UnsupportedRegion { ref reason } if reason.contains("bogus"))
+        );
     }
 }
