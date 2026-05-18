@@ -322,6 +322,11 @@ mod tests {
     fn audit_record_round_trips_without_timings() {
         let record = AuditRecord::default_for_test();
         let json = serde_json::to_string(&record).unwrap();
+        assert!(
+            !json.contains("\"timings\""),
+            "timings key should be absent from serialised JSON when None; \
+             analyzer relies on this to skip un-instrumented records"
+        );
         let back: AuditRecord = serde_json::from_str(&json).unwrap();
         assert!(
             back.timings.is_none(),
