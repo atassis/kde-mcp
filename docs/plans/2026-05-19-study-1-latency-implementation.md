@@ -910,13 +910,15 @@ const STATS: ReadonlyMap<string, ToolStats> = new Map([
 test("renderReport produces a markdown table with the expected headers", () => {
   const md = renderReport(STATS, { sinceLabel: "7 days", endingLabel: "2026-05-19" });
   assert.match(md, /# kde-mcp latency profile — 7 days ending 2026-05-19/);
-  assert.match(md, /\| Tool\s+\| n\s+\| p50 ms\s+\| p95 ms\s+\| p99 ms\s+\| dominant phase \(p95\)\s+\|/);
+  assert.match(md, /\| Tool\s+\|\s+n\s+\|\s+p50 ms\s+\|\s+p95 ms\s+\|\s+p99 ms\s+\|\s+dominant phase \(p95\)\s+\|/);
 });
 
 test("renderReport includes each tool row", () => {
   const md = renderReport(STATS, { sinceLabel: "7 days", endingLabel: "2026-05-19" });
-  assert.match(md, /\| observe\s+\| 312\s+\| 45\s+\| 98\s+\| 140\s+\| impl/);
-  assert.match(md, /\| screenshot\s+\| 87\s+\| 220\s+\| 480\s+\| 720\s+\| impl/);
+  // \s* on the right side of each numeric column tolerates the padStart output
+  // running flush against the trailing pipe (e.g. "312|" with no gap).
+  assert.match(md, /\| observe\s+\|\s+312\s*\|\s+45\s*\|\s+98\s*\|\s+140\s*\| impl/);
+  assert.match(md, /\| screenshot\s+\|\s+87\s*\|\s+220\s*\|\s+480\s*\|\s+720\s*\| impl/);
 });
 
 test("renderReport reports total N across all tools", () => {
