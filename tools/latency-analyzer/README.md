@@ -11,7 +11,10 @@ the daemon (see `src/audit.rs::AuditTimings`).
 
 ## Usage
 
-    npm run report -- --since 7d > docs/latency-profile.md
+    npm run --silent report -- --since 7d > docs/latency-profile.md
+
+The `--silent` flag suppresses npm's two-line preamble (`> kde-mcp-... report`)
+so the saved file contains only the markdown report.
 
 Flags:
 - `--since DURATION` — only consider records younger than DURATION

@@ -1188,8 +1188,10 @@ Expected: markdown output on stdout. At least one tool row with non-zero p50. Sk
 
 ```bash
 cd tools/latency-analyzer
-npm run report -- --since 7d > ../../docs/latency-profile.md
+npm run --silent report -- --since 7d > ../../docs/latency-profile.md
 ```
+
+The `--silent` flag suppresses npm's preamble (`> kde-mcp-... report`) so the file contains only the markdown report.
 
 - [ ] **Step 5: Commit**
 
