@@ -5,7 +5,7 @@
   "type": "module",
   "engines": { "node": ">=22" },
   "scripts": {
-    "build": "tsc",
+    "typecheck": "tsc",
     "test": "node --test --import tsx test/*.test.ts",
     "report": "node --import tsx src/cli.ts"
   },

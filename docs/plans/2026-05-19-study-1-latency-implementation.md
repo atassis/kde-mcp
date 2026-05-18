@@ -471,7 +471,7 @@ docs/specs/2026-05-19-evaluation-and-latency-design.md §3.1."
   "type": "module",
   "engines": { "node": ">=22" },
   "scripts": {
-    "build": "tsc",
+    "typecheck": "tsc",
     "test": "node --test --import tsx test/*.test.ts",
     "report": "node --import tsx src/cli.ts"
   },
@@ -495,13 +495,16 @@ docs/specs/2026-05-19-evaluation-and-latency-design.md §3.1."
     "esModuleInterop": true,
     "skipLibCheck": true,
     "noUncheckedIndexedAccess": true,
-    "outDir": "dist"
+    "allowImportingTsExtensions": true,
+    "noEmit": true
   },
   "include": ["src/**/*.ts", "test/**/*.ts"]
 }
 ```
 
-(Note: `rootDir` is intentionally omitted. Setting `rootDir: "src"` would conflict with the `test/**/*.ts` include and break `npm run build` — tsc would error that test files live outside rootDir. Let tsc infer the common root from `include`.)
+(Notes:
+- `rootDir` is intentionally omitted — setting `rootDir: "src"` would conflict with the `test/**/*.ts` include. Let tsc infer the common root from `include`.
+- `allowImportingTsExtensions: true` + `noEmit: true` because every TypeScript file in this package imports siblings with the explicit `.ts` extension (e.g., `import { parseJsonl } from "../src/parse.ts"`). The tsx runtime resolves these natively; tsc requires the flag to accept them. We don't emit JS at all — `tsx` runs the TS directly via the `test` and `report` scripts.)
 
 - [ ] **Step 3: Create `tools/latency-analyzer/.gitignore`**
 
