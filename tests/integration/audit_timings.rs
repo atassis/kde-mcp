@@ -48,16 +48,26 @@ fn init_body() -> serde_json::Value {
 }
 
 /// Read the first audit line that belongs to the given `tool` and parse
-/// it into an `AuditRecord`. Panics with the full body if no matching
-/// line is found (cheap debugging signal in CI).
-fn read_audit_record_for_tool(path: &Path, tool: &str) -> audit::AuditRecord {
-    let body = std::fs::read_to_string(path).expect("read audit");
+/// it into an `AuditRecord`. Polls the file for up to 1 s — the HTTP
+/// response returns before the audit write has flushed in some axum
+/// / rmcp configurations. Panics with the full body if no matching
+/// line is found within the budget (cheap debugging signal in CI).
+async fn read_audit_record_for_tool(path: &Path, tool: &str) -> audit::AuditRecord {
     let needle = format!("\"tool\":\"{tool}\"");
-    let line = body
-        .lines()
-        .find(|l| l.contains(&needle))
-        .unwrap_or_else(|| panic!("no audit line for tool={tool}; full body:\n{body}"));
-    serde_json::from_str(line).expect("audit json parse")
+    let deadline = std::time::Instant::now() + Duration::from_secs(1);
+    loop {
+        let body = std::fs::read_to_string(path).unwrap_or_default();
+        if let Some(line) = body.lines().find(|l| l.contains(&needle)) {
+            return serde_json::from_str(line).expect("audit json parse");
+        }
+        if std::time::Instant::now() >= deadline {
+            panic!(
+                "no audit line for tool={tool} within 1s; final body:\n{}",
+                body
+            );
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -96,10 +106,11 @@ async fn audit_record_carries_five_timings_after_a_tool_call() {
         .await
         .expect("POST /mcp tools/call");
 
-    // 3. audit.write(...).await is `await`ed inside the dispatcher BEFORE the
-    //    tool call's HTTP response is yielded, so the file is already flushed
-    //    by the time the POST above returns. No sleep needed.
-    let record = read_audit_record_for_tool(&audit_path, "observe");
+    // 3. Poll the audit file (up to 1 s) for the observe record. Some axum
+    //    / rmcp configurations release the HTTP response before the audit
+    //    write fully flushes, so a fixed sleep can either race or waste time
+    //    — a bounded poll-loop is sharper than either alternative.
+    let record = read_audit_record_for_tool(&audit_path, "observe").await;
     let t = record
         .timings
         .expect("timings must be present on observe record");
