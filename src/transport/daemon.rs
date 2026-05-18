@@ -250,6 +250,8 @@ async fn healthz(State(state): State<HealthState>) -> Json<serde_json::Value> {
         "ok": true,
         "uptime_s": state.started_at.elapsed().as_secs(),
         "sessions": state.sessions.load(Ordering::Relaxed),
+        "version": env!("CARGO_PKG_VERSION"),
+        "git_sha": env!("KDE_MCP_GIT_SHA"),
     }))
 }
 

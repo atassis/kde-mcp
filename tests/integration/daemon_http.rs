@@ -77,6 +77,21 @@ async fn healthz_reports_ok_without_auth() {
         "uptime_s should be a u64: {body}"
     );
     assert_eq!(body["sessions"], 0);
+    let version = body.get("version").and_then(|v| v.as_str());
+    assert!(version.is_some(), "healthz must report version");
+    assert!(
+        version.unwrap().chars().any(|c| c.is_ascii_digit()),
+        "healthz version should contain at least one digit"
+    );
+    let git_sha = body.get("git_sha").and_then(|v| v.as_str());
+    assert!(git_sha.is_some(), "healthz must report git_sha");
+    // git_sha is either a hex sha (likely short) or the literal "unknown"
+    // when build was not run inside a git tree
+    let s = git_sha.unwrap();
+    assert!(
+        s == "unknown" || s.chars().all(|c| c.is_ascii_hexdigit()),
+        "git_sha should be hex or 'unknown', got: {s}"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
