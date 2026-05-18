@@ -11,7 +11,11 @@ export interface AuditTimings {
 
 export interface AuditRecord {
   tool: string;
-  timestamp: string;
+  /** ISO-8601 wall-clock written by the daemon. Matches the Rust
+   *  `AuditRecord.ts` field. (Originally typed as `timestamp` — a wrong
+   *  field name caught by the cross-cutting review of feat/study-1-latency;
+   *  the bug silently disabled the --since filter against real logs.) */
+  ts: string;
   timings?: AuditTimings;
 }
 

@@ -6,7 +6,7 @@ import type { AuditRecord } from "../src/parse.ts";
 function fixture(tool: string, impl_done_ns: number): AuditRecord {
   return {
     tool,
-    timestamp: "2026-05-19T10:00:00Z",
+    ts: "2026-05-19T10:00:00Z",
     timings: {
       t_received_ns: 0,
       t_policy_done_ns: 1_000_000,
@@ -51,7 +51,7 @@ test("aggregate buckets records by tool and emits p50/p95/p99", () => {
 test("aggregate skips records without timings", () => {
   const records: AuditRecord[] = [
     fixture("observe", 10_000_000),
-    { tool: "observe", timestamp: "2026-05-19T10:00:00Z" },
+    { tool: "observe", ts: "2026-05-19T10:00:00Z" },
   ];
   const result = aggregate(records);
   assert.equal(result.get("observe")!.n, 1);

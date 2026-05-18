@@ -584,10 +584,10 @@ docs/specs/2026-05-19-evaluation-and-latency-design.md §3."
 `tools/latency-analyzer/test/fixtures/sample.jsonl`:
 
 ```
-{"tool":"observe","timestamp":"2026-05-19T10:00:00Z","timings":{"t_received_ns":0,"t_policy_done_ns":2000000,"t_impl_start_ns":2100000,"t_impl_done_ns":45000000,"t_audit_written_ns":45500000}}
-{"tool":"observe","timestamp":"2026-05-19T10:00:05Z","timings":{"t_received_ns":0,"t_policy_done_ns":1500000,"t_impl_start_ns":1600000,"t_impl_done_ns":98000000,"t_audit_written_ns":98300000}}
-{"tool":"screenshot","timestamp":"2026-05-19T10:00:10Z","timings":{"t_received_ns":0,"t_policy_done_ns":3000000,"t_impl_start_ns":3100000,"t_impl_done_ns":220000000,"t_audit_written_ns":220400000}}
-{"tool":"window_query","timestamp":"2026-05-19T10:00:11Z"}
+{"tool":"observe","ts":"2026-05-19T10:00:00Z","timings":{"t_received_ns":0,"t_policy_done_ns":2000000,"t_impl_start_ns":2100000,"t_impl_done_ns":45000000,"t_audit_written_ns":45500000}}
+{"tool":"observe","ts":"2026-05-19T10:00:05Z","timings":{"t_received_ns":0,"t_policy_done_ns":1500000,"t_impl_start_ns":1600000,"t_impl_done_ns":98000000,"t_audit_written_ns":98300000}}
+{"tool":"screenshot","ts":"2026-05-19T10:00:10Z","timings":{"t_received_ns":0,"t_policy_done_ns":3000000,"t_impl_start_ns":3100000,"t_impl_done_ns":220000000,"t_audit_written_ns":220400000}}
+{"tool":"window_query","ts":"2026-05-19T10:00:11Z"}
 ```
 
 The fourth line has no `timings` — must be parsed and yielded but with `timings: undefined`.
@@ -656,7 +656,9 @@ export interface AuditTimings {
 
 export interface AuditRecord {
   tool: string;
-  timestamp: string;
+  /** Matches the Rust AuditRecord.ts field (snake_case in JSON
+      becomes `ts` — not `timestamp`). */
+  ts: string;
   timings?: AuditTimings;
 }
 
@@ -711,7 +713,7 @@ import type { AuditRecord } from "../src/parse.ts";
 function fixture(tool: string, impl_done_ns: number): AuditRecord {
   return {
     tool,
-    timestamp: "2026-05-19T10:00:00Z",
+    ts: "2026-05-19T10:00:00Z",
     timings: {
       t_received_ns: 0,
       t_policy_done_ns: 1_000_000,
@@ -756,7 +758,7 @@ test("aggregate buckets records by tool and emits p50/p95/p99", () => {
 test("aggregate skips records without timings", () => {
   const records: AuditRecord[] = [
     fixture("observe", 10_000_000),
-    { tool: "observe", timestamp: "2026-05-19T10:00:00Z" },
+    { tool: "observe", ts: "2026-05-19T10:00:00Z" },
   ];
   const result = aggregate(records);
   assert.equal(result.get("observe")!.n, 1);
@@ -1091,7 +1093,7 @@ async function main() {
 
   const records: AuditRecord[] = [];
   for await (const r of parseJsonl(args.auditPath)) {
-    const t = Date.parse(r.timestamp);
+    const t = Date.parse(r.ts);
     if (!Number.isFinite(t) || t >= cutoff) records.push(r);
   }
 

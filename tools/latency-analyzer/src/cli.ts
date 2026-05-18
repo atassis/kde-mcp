@@ -46,7 +46,7 @@ async function main() {
 
   const records: AuditRecord[] = [];
   for await (const r of parseJsonl(args.auditPath)) {
-    const t = Date.parse(r.timestamp);
+    const t = Date.parse(r.ts);
     if (!Number.isFinite(t) || t >= cutoff) records.push(r);
   }
 
