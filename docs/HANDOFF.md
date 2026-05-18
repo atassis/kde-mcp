@@ -4,7 +4,11 @@ A snapshot of project state. Read this first if you are returning to the project
 
 ---
 
-## 2026-05-16 status (latest)
+## 2026-05-18 status (latest)
+
+ADR-0015 dropped the OAuth layer that ADR-0014 added two days earlier. `/mcp` returns 200 unauthenticated; the 127.0.0.1 bind is the trust boundary. Verified empirically: Claude Code 2.1.139 connects in 23 ms with no `Authorization` header and no `/.well-known/oauth-*` probe.
+
+## 2026-05-16 status
 
 The MVP shipped in May 2026. ADR-0011 (per-session lease) and ADR-0012 (singleton daemon over HTTP) both landed. Three transports in the binary; only the HTTP one is auto-deployed. The screenshot tool returns MCP image content — Claude Code's vision pathway picks it up directly, no base64-in-text round-trip.
 
@@ -18,8 +22,8 @@ cargo test --workspace         # 146+ tests, ~5s
 
 **Current deployment:**
 - Binary: `~/.local/bin/kde-mcp`, built from this tree at HEAD.
-- Daemon: systemd-user `kde-mcp-http.{socket,service}` listening on `127.0.0.1:7575`. **OAuth 2.1 authorization on `/mcp`** (ADR-0014): daemon is its own auth server, mints short-lived bearers at `/oauth/token`, advertises discovery at `/.well-known/oauth-{protected-resource,authorization-server}`. No bearer file. Idle-stops after 10 min of zero open sessions; socket-activated on next connection.
-- Claude Code MCP entry: `http://127.0.0.1:7575/mcp` — **no `Authorization` header in `~/.claude.json`** post-ADR-0014. Claude Code's OAuth client negotiates a bearer at MCP-connect time. **Requires `NO_PROXY=127.0.0.1,localhost,::1` in the Claude Code shell env** (Claude Code 2.1.x's HTTP MCP client routes loopback through HTTPS_PROXY otherwise).
+- Daemon: systemd-user `kde-mcp-http.{socket,service}` listening on `127.0.0.1:7575`. **No application-layer auth** (ADR-0015): `/mcp` returns 200 unauthenticated; the 127.0.0.1 bind is the trust boundary. Idle-stops after 10 min of zero open sessions; socket-activated on next connection.
+- Claude Code MCP entry: `http://127.0.0.1:7575/mcp` — no `Authorization` header. **Requires `NO_PROXY=127.0.0.1,localhost,::1` in the Claude Code shell env** (Claude Code 2.1.x's HTTP MCP client routes loopback through HTTPS_PROXY otherwise — that's still true, unrelated to auth).
 - Unix-socket transport (`kde-mcp.{socket,service}`) is implemented and tested but not auto-enabled — Claude Code 2.1.x refuses `unix://` URLs at the fetch layer. Flip the install.sh default to `unix` when upstream adds support.
 
 **Reference reading for understanding the current state:**

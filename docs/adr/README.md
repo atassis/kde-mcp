@@ -21,7 +21,8 @@ Format: 1-2 pages each. Sections: Status · Context · Decision · Consequences 
 | 0011 | Multi-session coexistence via per-session mutation lease | Accepted |
 | 0012 | Singleton daemon with HTTP transport for multi-session desktop use | Accepted |
 | 0013 | Remove `bash`, `text_editor_*`, sleep-only `wait` (MCP-purpose rule) | Accepted |
-| 0014 | OAuth 2.1 replaces static bearer; daemon is its own auth server | Accepted |
+| 0014 | OAuth 2.1 replaces static bearer; daemon is its own auth server | Superseded by 0015 |
+| 0015 | Drop OAuth; trust is the 127.0.0.1 bind | Accepted |
 
 ## When to add an ADR
 

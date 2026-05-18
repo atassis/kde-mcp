@@ -10,7 +10,6 @@ mod integration {
     pub mod daemon_http;
     pub mod keymap;
     pub mod lease;
-    pub mod oauth;
     pub mod observe_offline;
     pub mod tools_list;
 }

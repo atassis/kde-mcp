@@ -90,11 +90,11 @@ if [[ $SKIP_BUILD -eq 1 ]]; then
     fi
     echo "==> reusing $BIN (--skip-build) — $(stat -c '%y' "$BIN")"
 else
-    # `cargo build --release --locked` (instead of `cargo install`) — respects
-    # Cargo.lock, doesn't re-resolve dependencies, doesn't pull newer crate
-    # versions than tested. Then a single deterministic `install`.
-    echo "==> building (cargo build --release --locked)"
-    cargo build --release --locked
+    # `cargo build --release` (no --locked: this is a personal-use dev
+    # loop where deps are added during iteration; --locked refuses to
+    # update Cargo.lock and breaks installs the moment a dep is added).
+    echo "==> building (cargo build --release)"
+    cargo build --release
     echo "==> installing $BIN"
     install -D -m 0755 target/release/kde-mcp "$BIN"
 fi
@@ -153,9 +153,9 @@ case "$TRANSPORT" in
     systemctl --user stop kde-mcp.service kde-mcp.socket 2>/dev/null || true
     systemctl --user stop kde-mcp-http.service 2>/dev/null || true
     systemctl --user enable --now kde-mcp-http.socket
-    # Wait for /healthz so the next stage sees a live daemon. Post-
-    # ADR-0014 there's no bearer-token file to wait on — auth happens
-    # at MCP-connect time via OAuth.
+    # Wait for /healthz so the next stage sees a live daemon. Per
+    # ADR-0015 the /mcp endpoint is unauthenticated — the 127.0.0.1
+    # bind is the trust boundary; no auth handshake to validate.
     for _ in 1 2 3 4 5; do
         if curl -fsS http://127.0.0.1:7575/healthz >/dev/null 2>&1; then
             break
@@ -167,8 +167,8 @@ esac
 
 if [[ $SKIP_MCP -eq 0 ]]; then
     echo "==> registering kde-mcp at user scope (transport=$TRANSPORT)"
-    # Idempotent remove flushes any pre-ADR-0014 Authorization header
-    # left in ~/.claude.json by previous installs.
+    # Idempotent remove flushes any leftover Authorization header or
+    # OAuth-discovery cache state from pre-ADR-0015 installs.
     claude mcp remove --scope user kde-mcp >/dev/null 2>&1 || true
     case "$TRANSPORT" in
       unix)
@@ -176,9 +176,9 @@ if [[ $SKIP_MCP -eq 0 ]]; then
         claude mcp add --transport http --scope user kde-mcp "unix://${SOCKET_PATH}"
         ;;
       http)
-        # Post-ADR-0014: no Authorization header. Claude Code's OAuth
-        # client discovers the auth server via /.well-known/* and
-        # negotiates a bearer at connect time.
+        # Per ADR-0015: no Authorization header, no OAuth discovery.
+        # /mcp returns 200 unauthenticated; 127.0.0.1 bind is the trust
+        # boundary.
         claude mcp add --transport http --scope user kde-mcp http://127.0.0.1:7575/mcp
         ;;
       stdio)

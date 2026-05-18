@@ -1,6 +1,8 @@
 # ADR-0014: Daemon is the OAuth 2.1 authorization server for its own MCP resource
 
-**Status:** Accepted (2026-05-16)
+**Status:** Superseded by [[0015-remove-oauth-rely-on-bind]] (2026-05-18). The OAuth layer was protocol theater for our threat model — Claude Code 2.1.139 happily connects to an unauthenticated `/mcp` when the server doesn't advertise OAuth discovery.
+
+*Originally accepted 2026-05-16.*
 
 Supersedes the static-bearer-token mechanism from [[0012-singleton-daemon-http]] §4 ("bearer-token auth on /mcp"). The HTTP transport, the singleton-daemon shape, the systemd socket-activation, and the lease semantics are unchanged. Only the **authorization layer** flips: from a long-lived file-synced shared secret to a short-lived OAuth-2.1 access token negotiated at MCP-connect time.
 

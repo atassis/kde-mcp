@@ -1,25 +1,27 @@
 //! Daemon MCP transport — singleton per user (ADR-0012, amended
-//! 2026-05-16 to add three peer transports).
+//! 2026-05-16 to add Unix/TCP peer transports, ADR-0015 to drop the
+//! OAuth layer the TCP transport briefly carried).
 //!
 //! Two listener types in production:
 //!
 //!   - **Unix socket** (default) — `$XDG_RUNTIME_DIR/kde-mcp/mcp.sock`,
-//!     mode 0600. No bearer auth: filesystem permissions on the
-//!     parent dir (`XDG_RUNTIME_DIR` is 0700 per-user) plus the
-//!     socket mode mean only the owning UID can connect. Same-UID
-//!     processes are inside the threat model already — they could
-//!     drive libei directly without going through kde-mcp.
-//!   - **TCP loopback** (deprecated) — `127.0.0.1:7575`, OAuth 2.1
-//!     authorization (ADR-0014). The daemon is its own auth server:
-//!     it mints short-lived bearer tokens on demand at
-//!     `/oauth/token` and validates them on `/mcp`. No bearer in
-//!     `~/.claude.json`; Claude Code's OAuth client negotiates
-//!     transparently. Kept for non-systemd / non-Wayland deployments
-//!     and for tunnel-bridge tools. Note: clients that respect
+//!     mode 0600. Filesystem permissions on the parent dir
+//!     (`XDG_RUNTIME_DIR` is 0700 per-user) plus the socket mode mean
+//!     only the owning UID can connect. Same-UID processes are inside
+//!     the threat model already — they could drive libei directly
+//!     without going through kde-mcp.
+//!   - **TCP loopback** — `127.0.0.1:7575`. No application-layer auth
+//!     (ADR-0015): the 127.0.0.1 bind is the trust boundary. Empirically
+//!     verified that Claude Code 2.1.139 connects unauthenticated when
+//!     the server doesn't 401 and doesn't advertise OAuth discovery.
+//!     Different-UID and external attackers are blocked by the bind;
+//!     same-UID processes are inside the threat model regardless of
+//!     what auth scheme we layer on top. Note: clients that respect
 //!     `HTTPS_PROXY` for loopback URLs (Claude Code's HTTP MCP
-//!     client, in particular) will route the request through the
-//!     proxy and never reach us. Prefer `--transport=unix` on
-//!     KDE-Plasma-Wayland.
+//!     client) will route the request through the proxy and never
+//!     reach us — set `NO_PROXY=127.0.0.1,localhost,::1` in the
+//!     client's env. Prefer `--transport=unix` on KDE-Plasma-Wayland
+//!     once Claude Code supports `unix://` URLs.
 //!
 //! Both listener types pick up an fd from systemd via `LISTEN_FDS`
 //! when present; fall back to direct bind for dev / non-systemd runs.
@@ -68,31 +70,23 @@ struct HealthState {
 /// Public entry: Unix-domain socket listener.
 ///
 /// Picks up `LISTEN_FDS[0]` if systemd handed us a Unix socket; falls
-/// back to binding `default_socket_path()` directly. No bearer auth —
-/// filesystem permissions on `$XDG_RUNTIME_DIR/kde-mcp/` (0700) and
-/// the socket itself (0600) replace it.
+/// back to binding `default_socket_path()` directly. No application-
+/// layer auth — filesystem permissions on `$XDG_RUNTIME_DIR/kde-mcp/`
+/// (0700) and the socket itself (0600) are the trust boundary.
 pub async fn serve_unix(server: KdeMcp) -> Result<()> {
     let listener = pick_unix_listener().await?;
-    serve_with_listener_oauth_timeout(server, listener, None, IDLE_TIMEOUT).await
+    serve_with_listener_and_timeout(server, listener, IDLE_TIMEOUT).await
 }
 
-/// Public entry: TCP `127.0.0.1:7575` listener with OAuth 2.1
-/// authorization (ADR-0014).
+/// Public entry: TCP `127.0.0.1:7575` listener.
 ///
-/// **Deprecated** for desktop use. Picks up `LISTEN_FDS[0]` if systemd
-/// handed us a TCP socket; falls back to direct bind. Builds an
-/// [`OAuthState`] whose issuer URL matches the listener's bound
-/// address, mounts the discovery + token endpoints unauthenticated,
-/// and gates `/mcp` with [`oauth_validate_middleware`].
+/// Picks up `LISTEN_FDS[0]` if systemd handed us a TCP socket; falls
+/// back to direct bind. No application-layer auth (ADR-0015) — the
+/// 127.0.0.1 bind is the trust boundary; same-UID is inside the
+/// threat model regardless.
 pub async fn serve_http(server: KdeMcp) -> Result<()> {
     let listener = pick_tcp_listener().await?;
-    let addr = listener
-        .local_addr()
-        .context("TcpListener::local_addr for OAuth issuer")?;
-    let issuer = format!("http://{addr}");
-    let oauth = crate::transport::oauth::OAuthState::new(issuer.clone());
-    tracing::info!(%issuer, "daemon: OAuth issuer ready");
-    serve_with_listener_oauth_timeout(server, listener, Some(oauth), IDLE_TIMEOUT).await
+    serve_with_listener_and_timeout(server, listener, IDLE_TIMEOUT).await
 }
 
 /// Convenience for tests with default idle timeout. The listener is
@@ -114,41 +108,6 @@ where
     L: axum::serve::Listener + Send + 'static,
     L::Addr: std::fmt::Debug + Send,
 {
-    serve_with_listener_oauth_timeout(server, listener, None, idle).await
-}
-
-/// Same as [`serve_with_listener_and_timeout`] but with the OAuth
-/// authorization layer wired in. Tests use this directly to exercise
-/// the OAuth flow without going through `serve_http`'s TCP-bind path.
-pub async fn serve_with_listener_oauth<L>(
-    server: KdeMcp,
-    listener: L,
-    oauth: crate::transport::oauth::OAuthState,
-) -> Result<()>
-where
-    L: axum::serve::Listener + Send + 'static,
-    L::Addr: std::fmt::Debug + Send,
-{
-    serve_with_listener_oauth_timeout(server, listener, Some(oauth), IDLE_TIMEOUT).await
-}
-
-/// Common path. `oauth` is `Some(...)` for the HTTP transport (mounts
-/// discovery + token endpoints, gates `/mcp` with
-/// [`oauth_validate_middleware`]), `None` for Unix-socket and bare
-/// test scenarios.
-async fn serve_with_listener_oauth_timeout<L>(
-    server: KdeMcp,
-    listener: L,
-    oauth: Option<crate::transport::oauth::OAuthState>,
-    idle: Duration,
-) -> Result<()>
-where
-    L: axum::serve::Listener + Send + 'static,
-    L::Addr: std::fmt::Debug + Send,
-{
-    use crate::transport::oauth::{
-        oauth_validate_middleware, router as oauth_router, spawn_sweeper,
-    };
     // --- shared state -------------------------------------------------------
     let sessions = Arc::new(AtomicU64::new(0));
     let started_at = Instant::now();
@@ -220,22 +179,7 @@ where
     let stop = CancellationToken::new();
 
     let mcp_router = Router::new().route_service("/mcp", mcp_service);
-    let (mcp_router, discovery_router) = if let Some(oauth_state) = oauth {
-        let protected = mcp_router.layer(axum::middleware::from_fn_with_state(
-            oauth_state.clone(),
-            oauth_validate_middleware,
-        ));
-        let discovery = oauth_router(oauth_state.clone());
-        // TTL sweeper dies with the daemon's stop token.
-        spawn_sweeper(oauth_state, stop.clone());
-        (protected, Some(discovery))
-    } else {
-        (mcp_router, None)
-    };
-    let mut app = healthz_router.merge(mcp_router);
-    if let Some(discovery) = discovery_router {
-        app = app.merge(discovery);
-    }
+    let app = healthz_router.merge(mcp_router);
 
     // --- shutdown wiring ----------------------------------------------------
 

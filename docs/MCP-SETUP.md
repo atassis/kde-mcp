@@ -109,13 +109,81 @@ kbuildsycoca6 --noincremental
 rm -rf ~/.local/state/kde-mcp/
 ```
 
-## Verification
+## Post-deploy smoke
+
+Run after any `./packaging/install.sh` or daemon binary swap. Three tiers, fastest first. Stop at the tier that answers your question.
+
+> `claude mcp list` reports `✗ Failed to connect` for HTTP entries regardless of actual state — its health probe is cosmetic, not a real TCP dial. Ignore it. Use the tiers below.
+
+### Tier 1 — daemon wire shape (no Claude Code session, ~10 s)
 
 ```sh
-claude mcp list
-# expect: kde-mcp: ~/.local/bin/kde-mcp --mode=live - ✓ Connected
+# 1. Daemon process alive?
+systemctl --user is-active kde-mcp-http.service     # expect: active
 
-# In a Claude session:
-# > mcp__kde-mcp__observe with detail=summary
-# should return the windows list without prompting (allowlisted).
+# 2. healthz returns?
+curl -fsS http://127.0.0.1:7575/healthz | python3 -m json.tool
+# expect: {"ok": true, "sessions": <N>, "uptime_s": <N>}
+
+# 3. /mcp accepts unauthenticated initialize (per ADR-0015)?
+curl -sS -X POST http://127.0.0.1:7575/mcp \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: application/json, text/event-stream' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"smoke","version":"0"}}}' \
+  | grep -c '"name":"kde-mcp"'
+# expect: 1
+
+# 4. OAuth endpoints stay gone (ADR-0015 invariant)?
+for p in .well-known/oauth-protected-resource .well-known/oauth-authorization-server oauth/token; do
+  printf '%-50s → %s\n' "/$p" "$(curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:7575/$p)"
+done
+# expect: all 404
 ```
+
+If any of these fail, the rest of the tiers won't pass — fix the daemon first. Check `journalctl --user -u kde-mcp-http.service -n 20`.
+
+### Tier 2 — Claude Code can call a tool (~1 min)
+
+Pick a session to test in:
+
+- **Current session** (this one, if MCP tools are loaded): ask the model to call `mcp__kde-mcp__observe` with `{ "detail": "summary" }`. Tool is in the read-only allowlist, so it runs without a permission prompt. Expect a structured response with `windows`, `screens`, `cursor`.
+- **Fresh session** (when you want a clean-slate test, e.g. right after redeploying): in a separate terminal, run `claude` in this repo, then ask "call mcp__kde-mcp__observe with detail summary."
+
+If the model says it doesn't see the tool, run `/mcp` in that session to force a reconnect. If still missing, the in-process needs-auth cache may be stuck — exit and restart that Claude Code instance.
+
+Diagnostic of last resort: read `~/.cache/claude-cli-nodejs/<repo>/mcp-logs-kde-mcp/<newest>.jsonl`. A healthy connect looks like `"Successfully connected (transport: http) in <NN>ms"`. Anything else with `"Skipping connection (cached needs-auth)"` or `"401"` means a stale auth attempt is cached.
+
+### Tier 2.5 — One real-use-case scenario (~30 s – 3 min, fresh session preferred)
+
+Between "tool returns the right shape" and "everything is fine" sits "the user-facing scenario actually completes." Six scenarios live under `docs/runbook/scenarios/`:
+
+| ID | Use case | Pre-req | Approx cost |
+|---|---|---|---|
+| **S1** | Situational awareness — `observe` returns coherent snapshot | ≥1 window open | ~30 s, read-only |
+| **S2** | Drive KCalc end-to-end (open → 47×23 → return result) | `kcalc` installed | ~2 min, destructive (fires policy gate) |
+| **S3** | OCR fallback for canvas/PDF/image content | `magick`, `gwenview`, `tesseract` | ~3 min |
+| **S4** | Clipboard as transport with prior-content restore | `wl-clipboard` | ~1 min, destructive |
+| **S5** | Window management (move window to right half) | ≥1 user-focusable window | ~1 min, destructive |
+| **S6** | Brave form-fill (type into URL bar) | Brave + ≥1 tab | ~1 min, destructive |
+
+**Pick by what you changed:**
+
+- Transport / auth / daemon wiring → **S1** is the minimal post-deploy gate.
+- Keyboard / clipboard → **S4** + **S6**.
+- Window control → **S5**.
+- Policy gate / destructive paths → **S2** (exercises notification approvals).
+
+In a fresh `claude` session in this repo, ask: *"Read `docs/runbook/scenarios/S1-situational-awareness.md` and execute it."* The model reads the file's Steps/Accept/On-fail and produces a PASS/FAIL with the parsed fields.
+
+### Tier 3 — autonomous end-to-end (10+ min, fresh session only)
+
+For phase-boundary verification, not per-deploy. Start a fresh `claude` session in this repo and ask it to follow `docs/runbook/AUTONOMOUS-VERIFICATION.md` Layers 1–3 (Layer 4 is bug-bounty, optional). The runbook will create `docs/runbook/runs/<id>/summary.md` listing pass/fail per step + per scenario. Heavyweight; do not run on every deploy.
+
+## Quick sanity from any state
+
+```sh
+./packaging/install.sh         # rebuild + redeploy + flush stale claude.json state
+# then run Tier 1 above
+```
+
+The `install.sh` reruns `claude mcp remove kde-mcp` + re-add, which clears any leftover auth header / discovery cache from older daemons.
