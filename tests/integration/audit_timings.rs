@@ -96,8 +96,9 @@ async fn audit_record_carries_five_timings_after_a_tool_call() {
         .await
         .expect("POST /mcp tools/call");
 
-    // 3. Audit writes are async-flushed.
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    // 3. audit.write(...).await is `await`ed inside the dispatcher BEFORE the
+    //    tool call's HTTP response is yielded, so the file is already flushed
+    //    by the time the POST above returns. No sleep needed.
     let record = read_audit_record_for_tool(&audit_path, "observe");
     let t = record
         .timings

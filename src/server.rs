@@ -542,8 +542,10 @@ where
     };
     let _guard = crate::tray::TrayGuard::enter(&tray, tool);
     // Policy + lease + tray-guard setup done; about to enter the tool body.
-    let t_policy_done_ns = request_start.elapsed().as_nanos() as u64;
-    let t_impl_start_ns = request_start.elapsed().as_nanos() as u64;
+    // Single capture for both fields — same semantic boundary, no work between.
+    let policy_impl_boundary_ns = request_start.elapsed().as_nanos() as u64;
+    let t_policy_done_ns = policy_impl_boundary_ns;
+    let t_impl_start_ns = policy_impl_boundary_ns;
     let started = std::time::Instant::now();
     let outcome = fut.await;
     let duration_ms = started.elapsed().as_millis() as u64;
@@ -683,8 +685,10 @@ where
         }
     };
     let _guard = crate::tray::TrayGuard::enter(&tray, tool);
-    let t_policy_done_ns = request_start.elapsed().as_nanos() as u64;
-    let t_impl_start_ns = request_start.elapsed().as_nanos() as u64;
+    // Single capture for both fields — same semantic boundary, no work between.
+    let policy_impl_boundary_ns = request_start.elapsed().as_nanos() as u64;
+    let t_policy_done_ns = policy_impl_boundary_ns;
+    let t_impl_start_ns = policy_impl_boundary_ns;
     let started = std::time::Instant::now();
     let outcome = fut.await;
     let duration_ms = started.elapsed().as_millis() as u64;
