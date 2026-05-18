@@ -21,6 +21,7 @@ Thumbs.db
 state/
 *.log
 *.jsonl
+!tools/latency-analyzer/test/fixtures/*.jsonl
 /tmp-*/
 
 # Runbook per-run artefacts (screenshots, audit excerpts, payloads).
