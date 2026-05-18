@@ -495,19 +495,22 @@ docs/specs/2026-05-19-evaluation-and-latency-design.md §3.1."
     "esModuleInterop": true,
     "skipLibCheck": true,
     "noUncheckedIndexedAccess": true,
-    "outDir": "dist",
-    "rootDir": "src"
+    "outDir": "dist"
   },
   "include": ["src/**/*.ts", "test/**/*.ts"]
 }
 ```
+
+(Note: `rootDir` is intentionally omitted. Setting `rootDir: "src"` would conflict with the `test/**/*.ts` include and break `npm run build` — tsc would error that test files live outside rootDir. Let tsc infer the common root from `include`.)
 
 - [ ] **Step 3: Create `tools/latency-analyzer/.gitignore`**
 
 ```
 node_modules/
 dist/
+coverage/
 *.log
+*.tsbuildinfo
 ```
 
 - [ ] **Step 4: Create `tools/latency-analyzer/README.md`**
@@ -555,7 +558,7 @@ Clean up the stub: `rm src/parse.ts` (it'll be re-created in Task 6).
 - [ ] **Step 6: Commit**
 
 ```bash
-git add tools/latency-analyzer/package.json tools/latency-analyzer/tsconfig.json tools/latency-analyzer/.gitignore tools/latency-analyzer/README.md
+git add tools/latency-analyzer/package.json tools/latency-analyzer/tsconfig.json tools/latency-analyzer/.gitignore tools/latency-analyzer/README.md tools/latency-analyzer/package-lock.json
 git commit -m "feat(latency-analyzer): scaffold TypeScript package
 
 Reads kde-mcp's audit.jsonl, emits a markdown latency profile.
