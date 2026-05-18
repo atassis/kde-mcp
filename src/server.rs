@@ -496,7 +496,7 @@ where
                 ]);
                 let rec = crate::audit::AuditRecord {
                     ts: String::new(),
-                    mode,
+                    mode: mode.to_string(),
                     tool: tool.to_string(),
                     args: crate::audit::redact(tool, args),
                     ok: false,
@@ -504,6 +504,7 @@ where
                     error: Some(payload),
                     vision_fallback: None,
                     session_id: session_id.clone(),
+                    timings: None,
                 };
                 if let Err(e) = audit.write(rec).await {
                     tracing::error!(error = %e, tool, "audit write failed");
@@ -550,7 +551,7 @@ where
     };
     let rec = crate::audit::AuditRecord {
         ts: String::new(),
-        mode,
+        mode: mode.to_string(),
         tool: tool.to_string(),
         args: redacted_args,
         ok: audit_error.is_none(),
@@ -558,6 +559,7 @@ where
         error: audit_error,
         vision_fallback: None,
         session_id,
+        timings: None,
     };
     if let Err(e) = audit.write(rec).await {
         tracing::error!(error = %e, tool, "audit write failed");
@@ -603,7 +605,7 @@ where
                 ]);
                 let rec = crate::audit::AuditRecord {
                     ts: String::new(),
-                    mode,
+                    mode: mode.to_string(),
                     tool: tool.to_string(),
                     args: crate::audit::redact(tool, args),
                     ok: false,
@@ -611,6 +613,7 @@ where
                     error: Some(payload),
                     vision_fallback: None,
                     session_id: session_id.clone(),
+                    timings: None,
                 };
                 if let Err(e) = audit.write(rec).await {
                     tracing::error!(error = %e, tool, "audit write failed");
@@ -649,7 +652,7 @@ where
     };
     let rec = crate::audit::AuditRecord {
         ts: String::new(),
-        mode,
+        mode: mode.to_string(),
         tool: tool.to_string(),
         args: redacted_args,
         ok: audit_error.is_none(),
@@ -657,6 +660,7 @@ where
         error: audit_error,
         vision_fallback: None,
         session_id,
+        timings: None,
     };
     if let Err(e) = audit.write(rec).await {
         tracing::error!(error = %e, tool, "audit write failed");

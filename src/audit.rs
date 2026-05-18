@@ -1,15 +1,28 @@
 use chrono::Utc;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 use tokio::fs::{File, OpenOptions};
 use tokio::io::AsyncWriteExt;
 use tokio::sync::Mutex;
 
-#[derive(Debug, Serialize)]
+/// Fine-grained nanosecond timestamps wrapping the request lifecycle. Populated
+/// by `dispatch_audited` per spec docs/specs/2026-05-19-evaluation-and-latency-design.md §3.1.
+/// Optional on `AuditRecord` so legacy lines and lifecycle events stay valid.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub struct AuditTimings {
+    pub t_received_ns: u64,
+    pub t_policy_done_ns: u64,
+    pub t_impl_start_ns: u64,
+    pub t_impl_done_ns: u64,
+    pub t_audit_written_ns: u64,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 pub struct AuditRecord {
     pub ts: String,
-    pub mode: &'static str,
+    pub mode: String,
     pub tool: String,
     pub args: Value,
     pub ok: bool,
@@ -23,6 +36,8 @@ pub struct AuditRecord {
     /// where there's only one session per process.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timings: Option<AuditTimings>,
 }
 
 /// Redact sensitive args before audit-log persistence per spec §9.
@@ -67,7 +82,7 @@ impl AuditLog {
     pub async fn write_event(&self, event: &'static str, extra: Value) -> std::io::Result<()> {
         self.write(AuditRecord {
             ts: String::new(),
-            mode: "live",
+            mode: "live".into(),
             tool: event.to_string(),
             args: extra,
             ok: true,
@@ -75,6 +90,7 @@ impl AuditLog {
             error: None,
             vision_fallback: None,
             session_id: None,
+            timings: None,
         })
         .await
     }
@@ -164,6 +180,24 @@ impl AuditLog {
 }
 
 #[cfg(test)]
+impl AuditRecord {
+    pub(crate) fn default_for_test() -> Self {
+        Self {
+            ts: "1970-01-01T00:00:00Z".into(),
+            mode: "live".into(),
+            tool: "test_tool".into(),
+            args: serde_json::Value::Null,
+            ok: true,
+            duration_ms: None,
+            error: None,
+            vision_fallback: None,
+            session_id: None,
+            timings: None,
+        }
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -174,7 +208,7 @@ mod tests {
         let log = AuditLog::open(&path).await.unwrap();
         log.write(AuditRecord {
             ts: String::new(),
-            mode: "live",
+            mode: "live".into(),
             tool: "observe".into(),
             args: json!({}),
             ok: true,
@@ -182,6 +216,7 @@ mod tests {
             error: None,
             vision_fallback: None,
             session_id: None,
+            timings: None,
         })
         .await
         .unwrap();
@@ -210,7 +245,7 @@ mod tests {
         let log = AuditLog::open(&path).await.unwrap();
         log.write(AuditRecord {
             ts: String::new(),
-            mode: "live",
+            mode: "live".into(),
             tool: "observe".into(),
             args: json!({}),
             ok: true,
@@ -218,6 +253,7 @@ mod tests {
             error: None,
             vision_fallback: None,
             session_id: Some("11111111-2222-3333-4444-555555555555".into()),
+            timings: None,
         })
         .await
         .unwrap();
@@ -259,5 +295,37 @@ mod tests {
         );
         assert_eq!(r["action"], "click");
         assert_eq!(r["coordinate"], json!([100, 200]));
+    }
+
+    #[test]
+    fn audit_record_round_trips_with_timings() {
+        let timings = AuditTimings {
+            t_received_ns: 1_000_000,
+            t_policy_done_ns: 1_500_000,
+            t_impl_start_ns: 1_600_000,
+            t_impl_done_ns: 50_000_000,
+            t_audit_written_ns: 50_500_000,
+        };
+        let record = AuditRecord {
+            timings: Some(timings),
+            ..AuditRecord::default_for_test()
+        };
+        let json = serde_json::to_string(&record).unwrap();
+        let back: AuditRecord = serde_json::from_str(&json).unwrap();
+        let t = back.timings.expect("timings present after round-trip");
+        assert_eq!(t.t_received_ns, 1_000_000);
+        assert_eq!(t.t_audit_written_ns, 50_500_000);
+        assert!(t.t_impl_done_ns > t.t_impl_start_ns);
+    }
+
+    #[test]
+    fn audit_record_round_trips_without_timings() {
+        let record = AuditRecord::default_for_test();
+        let json = serde_json::to_string(&record).unwrap();
+        let back: AuditRecord = serde_json::from_str(&json).unwrap();
+        assert!(
+            back.timings.is_none(),
+            "timings should remain None when omitted"
+        );
     }
 }
