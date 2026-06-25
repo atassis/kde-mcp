@@ -777,7 +777,7 @@ kde-mcp/
 
 ### 13.1 Library version pins and plan-level adaptations (added 2026-05-14)
 
-The pinned versions in HANDOFF.md (`rmcp = "0.1"`, `reis = "0.4"`, `atspi = "0.22"`) were placeholders captured during the design conversation. Before plan writing, current crates.io versions were surveyed; see `docs/research/2026-05-13-rust-stack-current-apis.md` for the full delta. The pins below are what Phase 0 will compile against.
+Early placeholder pins (`rmcp = "0.1"`, `reis = "0.4"`, `atspi = "0.22"`) captured during design were later surveyed against current crates.io versions; see `docs/research/2026-05-13-rust-stack-current-apis.md` for the full delta. The pins below are what Phase 0 compiled against.
 
 | Crate | Pin | Notes |
 |---|---|---|

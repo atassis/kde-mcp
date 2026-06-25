@@ -1,20 +1,20 @@
 # Study 2 — Adversarial Probe Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking. Recommended branch: `feat/study-2-probe`.
+> Historical planning artifact — captures the plan as written on the date in the filename; the shipped implementation is the source of truth (see the ADRs and the design spec).
 
 **Goal:** Build a Python harness under `harness/` that runs 4 hand-built adversarial fixtures against two arms — kde-mcp's accessibility-tree-first surface (arm A) and Anthropic's `computer_20251124` tool bridged to kde-mcp's primitives (arm B) — then classify each (scenario × arm) outcome to inform the next-investment decision (vision-augmented mode vs new tools vs schema tuning).
 
-**Architecture:** Standalone Python package outside the Rust workspace (`harness/pyproject.toml`). Anthropic SDK first-class, non-streaming. Both arms drive the same kde-mcp daemon at `http://127.0.0.1:7575/mcp` (deliberate methodology choice — see spec §4.6). Vision arm bridges the schema-less `computer_20251124` actions to kde-mcp's screenshot/mouse/keyboard via a translation table. n=2 per (scenario × arm), tiebreak n=3 only on pass/fail disagreement. Diagnosis drafted in a fresh `claude` session loaded with the JSONL logs and the taxonomy excerpt only.
+**Architecture:** Standalone Python package outside the Rust workspace (`harness/pyproject.toml`). Anthropic SDK first-class, non-streaming. Both arms drive the same kde-mcp daemon at `http://127.0.0.1:7575/mcp` (deliberate methodology choice — see spec §4.6). Vision arm bridges the schema-less `computer_20251124` actions to kde-mcp's screenshot/mouse/keyboard via a translation table. n=2 per (scenario × arm), tiebreak n=3 only on pass/fail disagreement. Diagnosis drafted in an isolated session loaded with the JSONL logs and the taxonomy excerpt only.
 
 **Tech Stack:** Python 3.11+, `anthropic>=0.45`, `httpx`, `pyyaml`, `PySide6`. `pytest` + `pytest-httpx` for tests. Anthropic beta header `computer-use-2025-11-24` for arm B. Model: `claude-opus-4-7` pinned.
 
-**Budget:** ~$10–18 against $200/mo Max-20x programmatic credit pool. Tracked live via `response.usage` × published rates.
+**Budget:** ~$10–18 against a configurable USD cap. Tracked live via `response.usage` × published rates.
 
 **Spec reference:** [`docs/specs/2026-05-19-evaluation-and-latency-design.md`](../specs/2026-05-19-evaluation-and-latency-design.md) §4 (entire), §5 (cost projection).
 
 **Plan amendment convention:** Expect ~30% of commits to be plan syncs ("docs(plans): sync Task N with ...") when an implementing subagent discovers a constraint the planner missed. This is normal — Plan 1 had four such commits and the pattern caught bugs early. Commit the amendment, then continue.
 
-**Cross-cutting-review discipline:** Per [[feedback-cross-cutting-review-catches-contract-bugs]], dispatch a cross-cutting reviewer at every Python ↔ Rust boundary (JSONL format, MCP wire format, bridge action shape) **before** the boundary's first end-to-end run, not just at the end. Phases D, E, and G each end with an explicit cross-cutting checkpoint.
+**Cross-cutting-review discipline:** Per [[feedback-cross-cutting-review-catches-contract-bugs]], review every Python ↔ Rust boundary (JSONL format, MCP wire format, bridge action shape) **before** the boundary's first end-to-end run, not just at the end. Phases D, E, and G each close with a cross-cutting review at the boundary.
 
 **Gate-first ordering:** Phase C is the `computer-use-2025-11-24` smoke gate and runs as the first non-carry-forward task (Task 5). Phases D through H are all downstream of it — if the smoke fails (`permission_denied`, `text-only`, transient), do not author them. Phase A's carry-forward fixes (Tasks 1-3) and Phase B's minimal package scaffold (Task 4) ship before the gate because they have independent value: Phase A is unrelated Plan-1 leftovers, and Task 4 is the package skeleton the smoke needs to live in.
 
@@ -591,8 +591,8 @@ hand-built fixtures against two arms (kde-mcp's 12 tools vs Anthropic's
 
 ## Prerequisites
 
-- Anthropic API key in `ANTHROPIC_API_KEY` (Max-20x plan with the
-  `computer-use-2025-11-24` beta granted).
+- Anthropic API key in `ANTHROPIC_API_KEY` with the
+  `computer-use-2025-11-24` beta enabled.
 - kde-mcp daemon running and reachable at `http://127.0.0.1:7575/mcp`
   (check `curl http://127.0.0.1:7575/healthz`).
 - `brave` installed (for fixture E) and `gwenview` installed (for
@@ -643,7 +643,7 @@ commit `summary.md` manually to `docs/` once the diagnosis is drafted.
 
 ## Diagnosis (after runs)
 
-Per spec §4.11, draft the diagnosis in a fresh `claude` CLI session
+Per spec §4.11, draft the diagnosis in an isolated session
 loaded with **only** the JSONL logs from one run-session and the
 §4.10 taxonomy excerpt — NOT this design doc, the scenario YAMLs, or
 the harness source. Every claim in the diagnosis must quote a specific
@@ -801,7 +801,7 @@ or directly:
 
 Failure modes:
 - `no-api-key` — ANTHROPIC_API_KEY env var unset.
-- `permission_denied` / `model_not_granted` — the Max-20x plan
+- `permission_denied` / `model_not_granted` — the account/key
   doesn't yet include the computer-use beta. Surface to user;
   do NOT proceed past Phase C.
 - `text-only` — Claude returned text instead of a tool_use block.
@@ -913,7 +913,7 @@ HARNESS_LIVE_SMOKE=1 .venv/bin/pytest tests/test_smoke.py::test_live_smoke -v -s
 Expected: PASS — Claude requests `screenshot` via the `computer` tool. The pytest captured stdout (`-s`) prints `live smoke result: SmokeResult(ok=True, status='ok', ...)`. Cost ~$0.01.
 
 **If this FAILS:**
-- `permission_denied` → Stop. Tell the user. The Max-20x plan doesn't yet include the `computer-use-2025-11-24` beta. Do NOT proceed past Phase C.
+- `permission_denied` → Stop. Tell the user. The account/key doesn't yet include the `computer-use-2025-11-24` beta. Do NOT proceed past Phase C.
 - `text-only` → Stop. Likely the beta header wasn't honoured. Re-check the SDK version is recent enough (`pip show anthropic`). Surface to user; do NOT proceed.
 - `transient` → Retry the command once. If still failing, surface; do NOT proceed.
 
@@ -1603,28 +1603,6 @@ PythonFixtureLauncher, ImageFixtureLauncher, FileContainsVerifier,
 CoordRangeVerifier, ResponseContainsVerifier. Per spec §4.3 layout +
 §4.2 verification table."
 ```
-
----
-
-### Phase D cross-cutting checkpoint
-
-Before proceeding to Phase E, dispatch the cross-cutting reviewer:
-
-```
-Agent({
-  description: "Phase D cross-cutting review",
-  subagent_type: "superpowers:code-reviewer",
-  prompt: "Review harness/src/harness/{pricing.py,logger.py,scenario.py}
-           and their tests. Specifically check: (1) the JSONL event
-           format in logger.py against spec §4.9; (2) the event_id
-           shape against §4.11; (3) the pricing rates against
-           Anthropic's published numbers; (4) the YAML schema in
-           scenario.py against §4.2's verification table. Report any
-           contract bugs or schema drift."
-})
-```
-
-Fix any findings before moving on.
 
 ---
 
@@ -2822,33 +2800,6 @@ which the loop logs as an annotation per §4.6. Per spec §4.6."
 
 ---
 
-### Phase E cross-cutting checkpoint
-
-Dispatch:
-
-```
-Agent({
-  description: "Phase E cross-cutting review",
-  subagent_type: "superpowers:code-reviewer",
-  prompt: "Review harness/src/harness/{mcp_client,loop}.py and
-           harness/src/harness/arms/{kde_mcp_arm,vision_arm}.py.
-           Specifically check: (1) MCP wire format (JSON-RPC 2.0 over
-           Streamable HTTP) against the rmcp daemon code in
-           src/transport/daemon.rs; (2) the bridge table in
-           vision_arm.py against src/tools/mouse.rs and
-           src/tools/keyboard.rs (every kde-mcp arg name and value
-           must match); (3) Anthropic API field names against the SDK
-           (input_schema vs inputSchema, cache_control shape,
-           computer_20251124 declaration shape); (4) the LoopResult
-           classifications against spec §4.10. Report any contract
-           drift."
-})
-```
-
-Fix findings before proceeding to fixtures.
-
----
-
 ## Phase F — Fixtures + scenarios
 
 Four hand-built fixtures, one per (E, Q, D, R). Each task ships the fixture + the scenario YAML in a single commit.
@@ -3309,7 +3260,7 @@ if __name__ == "__main__":
 
 ```bash
 pip install --user Pillow  # if not already in dev deps
-cd ~/repositories/ns/atassis/kde-mcp
+cd ~/path/to/kde-mcp
 python harness/fixtures/probe-chart.gen.py
 ```
 
@@ -3796,7 +3747,7 @@ Expected: ImportError.
 
 Per spec §4.12. Per-scenario diagnosis sections are placeholder-filled
 ("[fill from diagnosis pass — quote event ids]"); the diagnosis pass
-(§4.11) edits the file by hand in a fresh `claude` session loaded
+(§4.11) edits the file by hand in an isolated session loaded
 with only the logs + taxonomy excerpt.
 """
 from __future__ import annotations
@@ -3843,7 +3794,7 @@ def render_summary(
         "",
         "## Per-scenario diagnosis",
         "",
-        "_Filled in a fresh `claude` session with only the JSONL logs and "
+        "_Filled in an isolated session with only the JSONL logs and "
         "§4.10 taxonomy excerpt loaded. Every claim must quote an event id._",
         "",
     ]
@@ -3931,40 +3882,15 @@ git commit -m "feat(harness): summary.md emitter
 
 Per spec §4.12. Auto-fills the summary table from trial
 classifications; leaves per-scenario diagnosis as placeholders for
-the fresh-claude diagnosis pass (§4.11). `harness report --runs ...`
+the isolated-session diagnosis pass (§4.11). `harness report --runs ...`
 re-emits the summary from saved JSONLs without re-running trials."
 ```
 
 ---
 
-### Phase G cross-cutting checkpoint
-
-Dispatch:
-
-```
-Agent({
-  description: "Phase G cross-cutting review",
-  subagent_type: "superpowers:code-reviewer",
-  prompt: "Review harness/src/harness/{cli.py,report.py} plus the
-           four fixtures and scenarios. Specifically check: (1) the
-           app_class strings match between fixture code (PySide6
-           app.setApplicationName / Brave --class flag) and scenario
-           YAML; (2) verifier paths and expected values match what
-           the fixtures actually write; (3) the run-all tiebreaker
-           logic correctly identifies pass/fail disagreement (and
-           NOT failure-mode disagreement, per spec §4.10);
-           (4) summary.md output structure matches spec §4.12.
-           Report any mismatches."
-})
-```
-
-Fix findings before execution phase.
-
----
-
 ## Phase H — Execution & analysis
 
-Three tasks: actually run the probes, draft the diagnosis in a fresh `claude` session, and dispatch the final cross-cutting review against the whole branch.
+Three tasks: actually run the probes, draft the diagnosis in an isolated session, and dispatch the final cross-cutting review against the whole branch.
 
 ### Task 19: Execute the probe
 
@@ -3973,7 +3899,7 @@ This is the manual-but-documented step. After the user pre-curates `policy.toml`
 - [ ] **Step 1: Ensure kde-mcp daemon is at HEAD**
 
 ```bash
-cd ~/repositories/ns/atassis/kde-mcp
+cd ~/path/to/kde-mcp
 cargo build --release
 install -D -m 0755 target/release/kde-mcp ~/.local/bin/kde-mcp
 systemctl --user restart kde-mcp-http.service
@@ -3992,7 +3918,7 @@ Expected: > 50. If empty, set it: `export ANTHROPIC_API_KEY=sk-ant-...`.
 - [ ] **Step 3: Re-run Phase 0 smoke**
 
 ```bash
-cd ~/repositories/ns/atassis/kde-mcp/harness
+cd ~/path/to/kde-mcp/harness
 .venv/bin/harness smoke
 ```
 
@@ -4062,7 +3988,7 @@ Don't commit the raw .jsonl logs — they may contain transient OS state. The su
 
 ---
 
-### Task 20: Draft the diagnosis in a fresh `claude` session
+### Task 20: Draft the diagnosis in an isolated session
 
 Per spec §4.11, the diagnosis must be drafted in a fresh session loaded with only the logs + taxonomy excerpt. This isolates the diagnosis from the design's prior framing.
 
@@ -4089,7 +4015,7 @@ Copy the auto-emitted summary (with placeholders) as the starting draft:
 cp "$RUN_DIR/summary.md" "$DIAG_DIR/summary.md"
 ```
 
-- [ ] **Step 2: Open a fresh `claude` session in that dir**
+- [ ] **Step 2: Open an isolated session in that dir**
 
 ```bash
 cd "$DIAG_DIR"
@@ -4116,7 +4042,7 @@ cp "$DIAG_DIR/summary.md" docs/adversarial-probe-$(date -u +%Y-%m-%d).md
 git add docs/adversarial-probe-$(date -u +%Y-%m-%d).md
 git commit -m "docs: study 2 diagnosis drafted via §4.11 protocol
 
-Fresh claude session loaded with only the JSONL logs and the §4.10
+Isolated session loaded with only the JSONL logs and the §4.10
 taxonomy excerpt. Every claim quotes an event_id. Verdict and
 per-scenario diagnoses filled in; cost block matches spend.json."
 ```
@@ -4125,37 +4051,19 @@ per-scenario diagnoses filled in; cost block matches spend.json."
 
 ### Task 21: Final cross-cutting code review
 
-Per the Plan 1 lesson ([[feedback-cross-cutting-review-catches-contract-bugs]]), dispatch one more cross-cutting reviewer against the entire `feat/study-2-probe` branch before merging.
+Per the Plan 1 lesson ([[feedback-cross-cutting-review-catches-contract-bugs]]), run one more cross-cutting review against the entire `feat/study-2-probe` branch before merging.
 
-- [ ] **Step 1: Dispatch the review**
+- [ ] **Step 1: Review the branch**
 
-```
-Agent({
-  description: "Study 2 final cross-cutting review",
-  subagent_type: "superpowers:code-reviewer",
-  prompt: "Review the entire feat/study-2-probe branch against the
-           plan at docs/plans/2026-05-19-study-2-adversarial-probe-implementation.md
-           and the spec at
-           docs/specs/2026-05-19-evaluation-and-latency-design.md §4.
-           Specifically:
-           1. Field-name parity at every Python ↔ Rust boundary.
-              JSON-RPC method names, kde-mcp tool arg shapes, Anthropic
-              API field names. The Plan 1 ts/timestamp mismatch is the
-              ur-example — find any analogue here.
-           2. Bridge-table completeness against src/tools/mouse.rs +
-              src/tools/keyboard.rs. Every kde-mcp arg name used by a
-              bridge entry must exist in the corresponding tool's
-              Args struct in Rust.
-           3. Tiebreaker logic in cli._run_all — pass/fail axis only,
-              not failure-mode (per spec §4.10).
-           4. Budget-guard: BUDGET_CAP_USD per trial AND
-              BUDGET_SESSION_USD * 0.85 per session. Confirm both.
-           5. The diagnosis output (docs/adversarial-probe-*.md)
-              actually has event-id quotes, not just narrative
-              referencing 'the logs'.
-           Report contract bugs, missing coverage, or any spec drift."
-})
-```
+Review the entire `feat/study-2-probe` branch against this plan and the spec at `docs/specs/2026-05-19-evaluation-and-latency-design.md` §4. Specifically:
+
+1. Field-name parity at every Python ↔ Rust boundary. JSON-RPC method names, kde-mcp tool arg shapes, Anthropic API field names. The Plan 1 ts/timestamp mismatch is the ur-example — find any analogue here.
+2. Bridge-table completeness against src/tools/mouse.rs + src/tools/keyboard.rs. Every kde-mcp arg name used by a bridge entry must exist in the corresponding tool's Args struct in Rust.
+3. Tiebreaker logic in cli._run_all — pass/fail axis only, not failure-mode (per spec §4.10).
+4. Budget-guard: BUDGET_CAP_USD per trial AND BUDGET_SESSION_USD * 0.85 per session. Confirm both.
+5. The diagnosis output (docs/adversarial-probe-*.md) actually has event-id quotes, not just narrative referencing 'the logs'.
+
+Look for contract bugs, missing coverage, or any spec drift.
 
 - [ ] **Step 2: Fix findings**
 
@@ -4176,6 +4084,7 @@ git merge --no-ff feat/study-2-probe
 
 ## Self-review checklist
 
+
 Run through this once after writing the plan:
 
 - [ ] **Spec coverage:** §4.1 inference scope → diagnosis (Task 20) header copy. §4.2 fixtures → Tasks 13-16. §4.3 harness architecture → Tasks 4, 6-8, 9-12, 17-18. §4.4 loop pseudocode → Task 10. §4.5 arm A → Task 11. §4.6 arm B + bridge table → Task 12. §4.7 Phase 0 smoke → Task 5. §4.8 caps → Task 10 (per-trial) + Task 17 (per-session abort). §4.9 logging schema → Task 7 (logger) + Task 10 (event types). §4.10 taxonomy → Task 10 (loop classifications) + Task 20 (taxonomy.md staging). §4.11 diagnosis protocol → Task 20. §4.12 summary.md → Task 18. §4.13 operational concerns: row 1 (app classes) → Tasks 13-16 fixtures + Task 17 setup-policy. Row 2 (serial runs) → no explicit lock (single-binary CLI; document in README); row 3 (leftover-fixture-kill) → `_kill_existing` in scenario.py. Row 4 (cumulative budget) → Task 17 run-all. Row 5/6 (model + kde-mcp version) → Task 5 smoke captures model from scenario YAML + Task 19 step 1 captures /healthz. Row 7 (focus/geometry) → Tasks 13-16 fixtures sleep after launch. Row 8 (privacy) → harness/.gitignore. Row 9 (API key) → Task 5 smoke + Task 17 run-all check. Row 10 (KDE_MCP_SESSION_TAG) → Task 3 + Task 17 sets default. §5 cost projection → Task 6 pricing + Task 11 cache_control. §6 out-of-scope items → not implemented, correct.
@@ -4184,16 +4093,10 @@ Run through this once after writing the plan:
 
 - [ ] **Type consistency.** Anthropic `input_schema` (snake_case) consistent across `kde_mcp_arm.translate_tool_definitions` (Task 11), the Arm protocol (Task 10), and `Arm.tool_definitions()` (Tasks 11, 12). `tool_result` field shape (`tool_use_id`, `content`, `is_error`) consistent across loop (Task 10) and both arms (Tasks 11, 12). `BRIDGE_TABLE` entries all reference kde-mcp tool args that exist in `src/tools/mouse.rs` (action, button, count, coordinate, start_coordinate, scroll_direction, scroll_amount, duration_ms) and `src/tools/keyboard.rs` (text, keys, hold_ms) — verified during plan authoring. `event_id` format `<scenario>-<arm>-trial<trial>-<event>[-n]` consistent across `logger._make_event_id` (Task 7) and diagnosis prompt (Task 20). `classification` field values (`pass`, `fail`, `timeout-budget`, `timeout-steps`) consistent across loop return (Task 10), report aggregator (Task 18), and CLI tiebreaker logic (Task 17).
 
-- [ ] **Contract-bug guards.** Live tests gated behind env vars: `HARNESS_LIVE_SMOKE` (Task 5), `HARNESS_LIVE_MCP` (Task 9). Cross-cutting reviewer dispatched after each multi-component phase (D, E, G, final). Plan 1 lesson incorporated.
+- [ ] **Contract-bug guards.** Live tests gated behind env vars: `HARNESS_LIVE_SMOKE` (Task 5), `HARNESS_LIVE_MCP` (Task 9). Cross-cutting review at each multi-component phase boundary (D, E, G, final). Plan 1 lesson incorporated.
 
 ---
 
-## Execution handoff
+## Execution notes
 
-Plan complete. Two execution options per the writing-plans skill:
-
-**1. Subagent-Driven (recommended for this plan)** — dispatch a fresh subagent per task, two-stage review between tasks. Given the 21-task scope and the cross-language contract surface, isolated subagent sessions plus aggressive cross-cutting review at each phase boundary are the right shape. Use `superpowers:subagent-driven-development`.
-
-**2. Inline Execution** — execute in this session with batch checkpoints via `superpowers:executing-plans`.
-
-Recommended branch: `feat/study-2-probe`. Worktree isolation is appropriate; use `superpowers:using-git-worktrees` before starting.
+Recommended branch: `feat/study-2-probe`.

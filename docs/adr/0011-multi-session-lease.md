@@ -16,10 +16,10 @@ Meta+Esc cancel target (ADR-0010).
 The assumption underneath was *one Claude Code session per user*. That's
 wrong. Claude Code spawns one MCP child per session over stdio, so a
 user running multiple sessions concurrently has the second one fail at
-startup with `lock_unavailable`. Concrete repro: autonomous verification
-runbook run 2026-05-15-1549 — L1.4 failed with `Failed to connect`
-because PID 171055 (kde-mcp owned by another Claude Code session) held
-the live lock; this session's child couldn't start.
+startup with `lock_unavailable`. Concrete repro: with one session
+already holding the live lock, a second session's MCP child failed to
+start — L1.4 reported `Failed to connect` because the lock was held by
+the first session's process.
 
 Five sessions registered in `claude mcp list` is normal usage on the
 target machine. Most are idle relative to the desktop (they're editing

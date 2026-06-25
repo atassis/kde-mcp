@@ -21,7 +21,7 @@ The script is idempotent. After a rebuild, re-run `./packaging/install.sh` to pu
 | Binary | `~/.local/bin/kde-mcp` | This file (rebuild = `cargo install --force`) |
 | `.desktop` | `~/.local/share/applications/kde-mcp.desktop` | Points `TryExec`/`Exec` at the installed binary |
 | MCP entry | `~/.claude.json` → `mcpServers.kde-mcp` | User-scope; created via `claude mcp add` |
-| Tool allowlist | `~/.claude/settings.json` → `permissions.allow` | 8 read-only tools pre-approved |
+| Tool allowlist | `~/.claude/settings.json` → `permissions.allow` | 6 read-only tools pre-approved |
 | Policy file | `~/.config/kde-mcp/policy.toml` *(not yet created)* | Defaults to `full` tier when missing |
 | Approvals state | `~/.local/state/kde-mcp/approvals.json` | Persistent Session approvals; gate manages it |
 | Audit log | `~/.local/state/kde-mcp/audit.jsonl` | One JSONL record per `tools/call` |
@@ -52,9 +52,9 @@ claude mcp add --transport stdio --scope user kde-mcp-virtual \
   -- ~/.local/bin/kde-mcp --mode=virtual --vnc=5910
 ```
 
-### Why allowlist 8 read-only tools, not all
+### Why allowlist 6 read-only tools, not all
 
-The 8 destructive tools (`keyboard.type`, `keyboard.key`, `mouse`, `clipboard_write`, `act_on_element`, `bash`, `text_editor.edit`, `window_control`) should always prompt — defense-in-depth alongside kde-mcp's own per-app policy gate. The 8 read-only ones (`observe`, `inspect`, `screenshot`, `read_text`, `wait`, `window_query`, `clipboard_read`, `text_editor.view`) have no side effects worth a prompt: skipping the prompt is pure UX win.
+The 6 destructive tools (`keyboard.type`, `keyboard.key`, `mouse`, `clipboard_write`, `act_on_element`, `window_control`) should always prompt — defense-in-depth alongside kde-mcp's own per-app policy gate. The 6 read-only ones (`observe`, `inspect`, `screenshot`, `read_text`, `window_query`, `clipboard_read`) have no side effects worth a prompt: skipping the prompt is pure UX win. (The tool surface is 12 wire tools total after ADR-0013 retired `bash`, `wait`, `text_editor.view`, and `text_editor.edit`.)
 
 Note: `screenshot` is marked read-only but its output captures pixels of whatever's on-screen, including potentially-sensitive content. Terminal-masking (`src/util/image.rs::TERMINAL_CLASSES`) mitigates the worst case. If you'd rather it prompted, remove `mcp__kde-mcp__screenshot` from the allowlist.
 
@@ -63,7 +63,7 @@ Note: `screenshot` is marked read-only but its output captures pixels of whateve
 After any code change you want reflected in the running MCP server:
 
 ```sh
-cd ~/repositories/ns/atassis/kde-mcp
+cd <repo-root>
 ./packaging/install.sh    # rebuilds + replaces ~/.local/bin/kde-mcp; idempotent
 ```
 
@@ -151,7 +151,7 @@ Pick a session to test in:
 
 If the model says it doesn't see the tool, run `/mcp` in that session to force a reconnect. If still missing, the in-process needs-auth cache may be stuck — exit and restart that Claude Code instance.
 
-Diagnostic of last resort: read `~/.cache/claude-cli-nodejs/<repo>/mcp-logs-kde-mcp/<newest>.jsonl`. A healthy connect looks like `"Successfully connected (transport: http) in <NN>ms"`. Anything else with `"Skipping connection (cached needs-auth)"` or `"401"` means a stale auth attempt is cached.
+Diagnostic of last resort: read `<claude-mcp-logs>/mcp-logs-kde-mcp/<newest>.jsonl` (Claude Code's per-project MCP log dir under `~/.cache/claude-cli-nodejs/`). A healthy connect looks like `"Successfully connected (transport: http) in <NN>ms"`. Anything else with `"Skipping connection (cached needs-auth)"` or `"401"` means a stale auth attempt is cached.
 
 ### Tier 2.5 — One real-use-case scenario (~30 s – 3 min, fresh session preferred)
 

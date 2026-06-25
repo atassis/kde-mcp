@@ -1,28 +1,28 @@
 # Verification runbook — design
 
 **Status:** draft (awaiting user review)
-**Author:** AI session 2026-05-15
+**Author:** atassis
 **Supersedes:** none
 
 ---
 
 ## Purpose
 
-A self-contained doc + log layout that lets a fresh Claude Code session test `kde-mcp` end-to-end as a product, autonomously: read steps, call MCP tools, validate responses against acceptance criteria, capture structured artefacts, apply one known fix per failure, and write a one-page summary.
+A self-contained doc + log layout defining a machine-executable verification protocol an agent or script can run to test `kde-mcp` end-to-end as a product: read steps, call MCP tools, validate responses against acceptance criteria, capture structured artefacts, apply one known fix per failure, and write a one-page summary.
 
 Two things this *is not*:
 
-- **Not a Rust test framework.** No code changes. Pure markdown + a fixed log directory layout. The session is the executor.
+- **Not a Rust test framework.** No code changes. Pure markdown + a fixed log directory layout. The agent or script is the executor.
 - **Not an AI-debug loop.** The "auto-fix" is a static `KNOWN-FIXES.md` lookup table — signature → mechanical command. Anything outside the table is logged and skipped, never debugged on the fly.
 
 The runbook complements `docs/TESTING-CHECKLIST.md` (which lists *what* to verify) by giving the *how*: stepwise, parseable instructions.
 
 ## Goals
 
-1. A fresh Claude Code session can run the full verification by being told only "follow `docs/runbook/AUTONOMOUS-VERIFICATION.md`."
+1. The full verification can be run by pointing an agent or script at `docs/runbook/AUTONOMOUS-VERIFICATION.md` — no other instructions required.
 2. Every step produces a machine-parseable artefact (JSON response payload, audit-log excerpt, screenshot, OCR output) under `docs/runbook/runs/<id>/`.
-3. Failures don't halt the run; they log and the session continues unless an explicit dependency requires the failed step.
-4. Resumability — if a run dies, the next session can read `runs/<latest>/progress.jsonl`, find the last completed step, and pick up there.
+3. Failures don't halt the run; they log and the run continues unless an explicit dependency requires the failed step.
+4. Resumability — if a run dies, the next run can read `runs/<latest>/progress.jsonl`, find the last completed step, and pick up there.
 5. The runbook stays in lock-step with `docs/TESTING-CHECKLIST.md`: every item in the checklist maps to one or more runbook steps via a `tc-ref` field.
 
 ## Non-goals
@@ -82,7 +82,7 @@ If the installed binary is missing, the known-fix is `./packaging/install.sh`.
 
 #### Layer 2 — Per-tool acceptance (≈16 steps, ~5 min, mostly read-only)
 
-Each of the 16 tools called once via the live MCP session (Claude Code's already-registered `kde-mcp`). Read-only tools run first (no approval prompts since they're allowlisted in `~/.claude/settings.json`); destructive tools batched at the end so all approval prompts arrive together.
+Each of the 12 tools called once via the live MCP session (Claude Code's already-registered `kde-mcp`). Read-only tools run first (no approval prompts since they're allowlisted in `~/.claude/settings.json`); destructive tools batched at the end so all approval prompts arrive together.
 
 Per tool:
 - Probe args chosen to be minimal and obvious: `observe(detail=summary)`, `text_editor.view /etc/hostname`, `screenshot(region=active_screen)`, `bash(command="echo hello", restart=false)`, etc.
@@ -190,11 +190,11 @@ The agent is told to read this template upfront and apply it uniformly. No prose
 | `external_command_failed.*magick` | (none — skip S3 fixture generation) | no |
 | `kde-mcp .* connection refused` | restart Claude Code session — abort run | no |
 
-The session matches against the structured error response (`code` + `details.detail`), applies the fix exactly once, retries the step once, then moves on. No fuzzy matching, no AI judgment.
+The executor matches against the structured error response (`code` + `details.detail`), applies the fix exactly once, retries the step once, then moves on. No fuzzy matching, no AI judgment.
 
 ### Resumability
 
-When a session starts the runbook:
+When the runbook starts:
 1. Scan `docs/runbook/runs/` for the most recent dir.
 2. Read its `progress.jsonl`. If a `summary.md` exists, the previous run completed — create a new dir and start fresh.
 3. If no summary: find the last completed step in `progress.jsonl`, log "resuming after <step id>", and continue from the next step.
@@ -208,7 +208,7 @@ The runbook still assumes one verification session at a time, but ADR-0011 remov
 ## What gets verified vs not
 
 **Verified by this runbook:**
-- All 16 tools end-to-end through the live MCP path.
+- All 12 tools end-to-end through the live MCP path.
 - All schema-level expectations from `tests/integration/tools_list.rs`.
 - The bug-bounty section of TESTING-CHECKLIST.md (deterministic items only).
 - Most of TESTING-CHECKLIST.md's Phase 2 (D.1–D.5) and Phase 3 (policy gate) items.
@@ -242,7 +242,7 @@ The agent executing the runbook needs:
 
 ## Risks
 
-1. **Runbook drift.** If kde-mcp gains a 17th tool, the L2 layer is silently incomplete. Mitigation: L1 runs `cargo test --workspace`, which fails on drift via `tests/integration/tools_list.rs::server_advertises_sixteen_tools_with_expected_names`. The runbook treats a cargo-test failure as `runbook_outdated` and aborts before continuing into L2.
+1. **Runbook drift.** If kde-mcp gains a 13th tool, the L2 layer is silently incomplete. Mitigation: L1 runs `cargo test --workspace`, which fails on drift via `tests/integration/tools_list.rs::server_advertises_twelve_tools_with_expected_names`. The runbook treats a cargo-test failure as `runbook_outdated` and aborts before continuing into L2.
 2. **Brave dependency for S6.** If Brave is closed when the runbook starts, S6 is skipped — loss of one scenario, run continues.
 3. **Approval-notification fatigue.** Destructive tool steps each fire a KDE policy-gate prompt the first time. After the first batch of approvals lands in `~/.local/state/kde-mcp/approvals.json` (Session-scoped), subsequent runs skip the prompts — but the first run requires ~6 clicks. Documented in the runbook intro so the user is prepared.
 4. **Run artefacts may contain sensitive content.** Screenshot pixels, clipboard contents, file paths — gitignoring `runs/` mitigates leakage; the runbook intro warns the user not to share a `runs/` directory wholesale.

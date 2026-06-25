@@ -255,7 +255,7 @@ Done — daemon mode, Unix socket (ADR-0012).
   Logs:    journalctl --user -u kde-mcp.service -f
   Status:  systemctl --user status kde-mcp.service kde-mcp.socket
   Stop:    systemctl --user stop kde-mcp.socket
-Open a fresh Claude Code session to pick up the new MCP entry.
+Restart your MCP client to pick up the new MCP entry.
 NOTE
         ;;
     http)
@@ -268,13 +268,13 @@ once Claude Code supports unix:// URLs).
   Stop:    systemctl --user stop kde-mcp-http.socket
 Note: clients that route loopback through HTTPS_PROXY (Node-based MCP
 clients) need NO_PROXY=127.0.0.1 set in the environment.
-Open a fresh Claude Code session to pick up the new MCP entry.
+Restart your MCP client to pick up the new MCP entry.
 NOTE
         ;;
     stdio)
         cat <<'NOTE'
 Done — stdio mode.
-Open a fresh Claude Code session to pick up the new server.
+Restart your MCP client to pick up the new server.
 First call will fire a KDE notification ("Claude acquired your desktop"); that's by design.
 See docs/MCP-SETUP.md for operational gotchas.
 NOTE

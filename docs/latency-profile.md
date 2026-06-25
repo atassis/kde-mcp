@@ -2,6 +2,8 @@
 
 N = 3 tool calls across 2 tools.
 
+_Illustrative sample from light development use — the value here is the per-phase profiling methodology (see `tools/latency-analyzer/`), not the sample size._
+
 | Tool          |    n | p50 ms | p95 ms | p99 ms | dominant phase (p95)
 |---------------|-----:|-------:|-------:|-------:|---------------------
 | window_query  |    1|      3|      3|      3| impl

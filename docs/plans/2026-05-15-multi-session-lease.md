@@ -1,6 +1,6 @@
 # Multi-session mutation lease — Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> Historical planning artifact — captures the plan as written on the date in the filename; the shipped implementation is the source of truth (see the ADRs and the design spec).
 
 **Goal:** Replace the spec §11.3 startup `<mode>.lock` with a per-session lease (ADR-0011) so multiple concurrent Claude Code sessions can coexist, with mutual exclusion enforced at the workflow level — not at process startup.
 

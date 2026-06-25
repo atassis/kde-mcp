@@ -1,10 +1,10 @@
 # Verification Runbook Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> Historical planning artifact — captures the plan as written on the date in the filename; the shipped implementation is the source of truth (see the ADRs and the design spec).
 
-**Goal:** Produce a self-contained markdown runbook + log layout that lets a fresh Claude Code session test `kde-mcp` end-to-end as a product, autonomously. Implements the design at `docs/specs/2026-05-15-verification-runbook-design.md`.
+**Goal:** Produce a self-contained markdown runbook + log layout that lets a fresh agent session test `kde-mcp` end-to-end as a product, autonomously. Implements the design at `docs/specs/2026-05-15-verification-runbook-design.md`.
 
-**Architecture:** Pure documentation. No Rust changes. Eight markdown files under `docs/runbook/`, one `.gitignore` line, and small updates to `docs/HANDOFF.md` + `docs/TESTING-CHECKLIST.md` to reference the new runbook. The runbook is the "code" — every step uses a fixed parseable template (`Goal/Pre/Depends-on/Steps/Accept/Artefacts/On fail/Cleanup`) that an executing agent reads and follows uniformly. Auto-fix is a static `KNOWN-FIXES.md` lookup; no AI debug loop.
+**Architecture:** Pure documentation. No Rust changes. Eight markdown files under `docs/runbook/`, one `.gitignore` line, and small updates to the README + `docs/TESTING-CHECKLIST.md` to reference the new runbook. The runbook is the "code" — every step uses a fixed parseable template (`Goal/Pre/Depends-on/Steps/Accept/Artefacts/On fail/Cleanup`) that an executing agent reads and follows uniformly. Auto-fix is a static `KNOWN-FIXES.md` lookup; no AI debug loop.
 
 **Tech Stack:** Markdown (CommonMark). The agent that *runs* the runbook will use bash + `mcp__kde-mcp__*` tools + `python3` for JSON munging. No new dependencies for this plan.
 
@@ -41,7 +41,7 @@
 | `docs/runbook/scenarios/S4-clipboard-transport.md` | Create | Save clipboard → write probe → read → assert match → restore. |
 | `docs/runbook/scenarios/S5-window-management.md` | Create | window_query → save geom → move to [100,100,800,600] → observe assert → restore. |
 | `docs/runbook/scenarios/S6-brave-form-fill.md` | Create | window_query Brave → focus → ctrl+l → type marker → inspect URL bar → assert marker present → Esc. |
-| `docs/HANDOFF.md` | Modify | Two-line "How to verify" pointer to the runbook. |
+| `README.md` | Modify | Two-line "How to verify" pointer to the runbook. |
 | `docs/TESTING-CHECKLIST.md` | Modify | Header note: items prefixed with `[auto]` are covered by the runbook; the rest still need human eyes. |
 
 ---
@@ -177,7 +177,7 @@ Path: `docs/runbook/AUTONOMOUS-VERIFICATION.md`. Use this exact structure:
 ````markdown
 # Autonomous verification runbook — kde-mcp
 
-A fresh Claude Code session should be able to verify kde-mcp end-to-end by reading this file top-to-bottom and executing each step. Auto-fix is mechanical only — see `KNOWN-FIXES.md`. There is no AI debug loop; novel failures get logged and the run continues.
+A fresh agent session should be able to verify kde-mcp end-to-end by reading this file top-to-bottom and executing each step. Auto-fix is mechanical only — see `KNOWN-FIXES.md`. There is no AI debug loop; novel failures get logged and the run continues.
 
 **Design spec:** `docs/specs/2026-05-15-verification-runbook-design.md`.
 
@@ -1042,15 +1042,15 @@ If everything was clean, this task is a no-op (no commit).
 ## Task 13: Wire the runbook into existing docs
 
 **Files:**
-- Modify: `docs/HANDOFF.md` — add a one-paragraph pointer.
+- Modify: `README.md` — add a one-paragraph pointer.
 - Modify: `docs/TESTING-CHECKLIST.md` — add a header note linking to the runbook.
 
-- [ ] **Step 1: Update HANDOFF.md**
+- [ ] **Step 1: Update the README**
 
-Find the section starting with `## TL;DR — what to do first in a fresh session` and after the existing code block, insert (before the next `**Phases ...**` line):
+Find the README's "getting started" / status section and, after the existing code block, insert the pointer below:
 
 ```markdown
-**Autonomous verification:** A fresh Claude Code session can run end-to-end tests by following `docs/runbook/AUTONOMOUS-VERIFICATION.md`. The runbook covers all 16 tools, six product scenarios (S1–S6), and 4 of 6 bug-bounty probes. Per-run artefacts land in `docs/runbook/runs/<id>/` (gitignored). Auto-fix is mechanical only via `docs/runbook/KNOWN-FIXES.md` — no AI debug loop. **Prerequisite:** `./packaging/install.sh` must have been run at least once.
+**Autonomous verification:** A fresh agent session can run end-to-end tests by following `docs/runbook/AUTONOMOUS-VERIFICATION.md`. The runbook covers all 16 tools, six product scenarios (S1–S6), and 4 of 6 bug-bounty probes. Per-run artefacts land in `docs/runbook/runs/<id>/` (gitignored). Auto-fix is mechanical only via `docs/runbook/KNOWN-FIXES.md` — no AI debug loop. **Prerequisite:** `./packaging/install.sh` must have been run at least once.
 ```
 
 - [ ] **Step 2: Update TESTING-CHECKLIST.md**
@@ -1064,7 +1064,7 @@ At the very top of `docs/TESTING-CHECKLIST.md`, immediately after the title line
 - [ ] **Step 3: Verify edits**
 
 ```bash
-grep -F 'Autonomous verification' docs/HANDOFF.md
+grep -F 'Autonomous verification' README.md
 grep -F 'Some of this is automated' docs/TESTING-CHECKLIST.md
 ```
 
@@ -1079,10 +1079,10 @@ If anything reads awkwardly → fix inline. Tiny doc-only fixes don't need their
 - [ ] **Step 5: Commit**
 
 ```bash
-git add docs/HANDOFF.md docs/TESTING-CHECKLIST.md
+git add README.md docs/TESTING-CHECKLIST.md
 # plus any smoke-read fixes:
 git add docs/runbook/ 2>/dev/null || true
-git commit -m "docs: link autonomous verification runbook from HANDOFF + checklist"
+git commit -m "docs: link autonomous verification runbook from README + checklist"
 ```
 
 ---
@@ -1124,13 +1124,13 @@ cargo fmt --check && cargo clippy --workspace --all-targets -- -D warnings
 # expect: no output, exit 0
 ```
 
-If all 5 final checks pass, the plan is complete. The runbook is ready for a fresh Claude Code session to execute.
+If all 5 final checks pass, the plan is complete. The runbook is ready for a fresh agent session to execute.
 
 ---
 
 ## What this plan does NOT do
 
-- Doesn't execute the runbook. That's a separate exercise — open a fresh Claude Code session, point it at the runbook, let it run.
+- Doesn't execute the runbook. That's a separate exercise — open a fresh agent session, point it at the runbook, let it run.
 - Doesn't add Phase 5 (virtual mode) verification. Explicit non-goal per spec.
 - Doesn't add the EIS-frame instrumentation needed for B1 / B2 — deferred to v2.
 - Doesn't modify any Rust code. Pure docs.

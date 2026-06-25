@@ -1,14 +1,14 @@
-# Testing & verification checklist — to run in parallel / after autonomous writing
+# Testing & verification checklist
 
 > **Some of this is automated.** The runbook at `docs/runbook/AUTONOMOUS-VERIFICATION.md` covers the deterministic items; what remains here is for human eyes (color fidelity, typing feel, manual UX gut-checks) or items that need EIS-frame instrumentation. A fresh session running the runbook will create `docs/runbook/runs/<id>/summary.md` listing which checklist items it touched.
 
-The autonomous push through Phases 3–6 wrote a lot of code that has unit tests but hasn't been run live. This document is the operator's checklist for actually exercising it on the dev machine. Items are grouped by phase and ordered roughly from "lightest live impact" to "heaviest."
+Phases 3–6 produced a lot of code that has unit tests but hasn't been run live. This document is the operator's checklist for actually exercising it on the dev machine. Items are grouped by phase and ordered roughly from "lightest live impact" to "heaviest."
 
 **Convention:** each `--mode=live` invocation fires the "Claude is using your computer" KDE notification. Group fixtures into batches if you don't want a dozen notifications across the morning.
 
 ---
 
-## Phase 2 live smoke (deferred during autonomous work)
+## Phase 2 live smoke (deferred)
 
 These were code-complete at the start of this round but the live runs weren't done.
 
@@ -48,44 +48,40 @@ If all green: `git tag phase-2`.
   - [ ] An in-flight `keyboard.type` of a long string aborts mid-emission and returns `cancelled, cancelled_at_stage: "keyboard.type/char-N"`.
   - [ ] Subsequent tool calls work normally (token resets per call).
   - [ ] Cancel works during `mouse drag` (aborts after the current frame).
-  - [ ] Cancel works during long `bash` invocations (signals SIGINT to the child).
+  - [ ] Cancel works during a long input emission (Meta+Esc aborts the sequence mid-flight).
 - [ ] **Mutation lease coexistence** — start two `kde-mcp --mode=live` instances concurrently. Both should run. Issue a long-running mutating tool (e.g. `keyboard.type` of a long string) on session A; a mutating tool from session B should block on the lease and either succeed after A releases or return `busy { holder_pid, holder_intent, lease_expires_in_ms }` after `acquire_timeout`. Observation tools from B (`observe`, `screenshot`) should never block. See ADR-0011.
 
 ---
 
 ## Phase 4 — remaining destructive tools
 
-### bash
-- [ ] **First call lazily spawns a PTY.** Subsequent calls reuse the same PTY (persistent session — `cd /tmp` then `pwd` returns `/tmp`).
-- [ ] **Output truncation at 16KB** with `truncated: true` + `full_output: "file:///tmp/.../bash-out-<id>.txt"` resource_link.
-- [ ] **Blocklist** rejects each of:
-  - [ ] `rm -rf /` (and variants ending at root)
-  - [ ] `rm -rf ~` / `rm -rf $HOME`
-  - [ ] `dd of=/dev/sda` / `dd of=/dev/sdb1`
-  - [ ] `mkfs.ext4 /dev/sda1`
-  - [ ] `:(){:|:&};:` fork bomb
-  - [ ] Plain `sudo …` (unless `--allow-sudo` flag passed at server startup)
-  - [ ] Plain `pkexec …`
-- [ ] **Timeout handling** — `command: "sleep 200", timeout_ms: 500` returns within ~600ms with `timeout` error.
-- [ ] **restart=true** tears down the existing PTY; the next call sees a fresh environment (no preserved `cd`).
-- [ ] **Sensitive-path warnings** — `bash` reading `~/.ssh/id_rsa` adds `warnings: [...]` to the response.
+### bash — RETIRED by ADR-0013 (tool removed; Claude Code's native bash covers shell access)
+_The checks below are kept only as a historical record of what the retired `bash` tool was tested against. They are no longer part of the live tool surface._
+- [ ] ~~**First call lazily spawns a PTY.** Subsequent calls reuse the same PTY (persistent session — `cd /tmp` then `pwd` returns `/tmp`).~~
+- [ ] ~~**Output truncation at 16KB** with `truncated: true` + `full_output: "file:///tmp/.../bash-out-<id>.txt"` resource_link.~~
+- [ ] ~~**Blocklist** rejects `rm -rf /`, `rm -rf ~` / `rm -rf $HOME`, `dd of=/dev/sda`, `mkfs.ext4 /dev/sda1`, `:(){:|:&};:` fork bomb, plain `sudo …`, plain `pkexec …`.~~
+- [ ] ~~**Timeout handling** — `command: "sleep 200", timeout_ms: 500` returns within ~600ms with `timeout` error.~~
+- [ ] ~~**restart=true** tears down the existing PTY; the next call sees a fresh environment (no preserved `cd`).~~
+- [ ] ~~**Sensitive-path warnings** — `bash` reading `~/.ssh/id_rsa` adds `warnings: [...]` to the response.~~
 
-### text_editor.edit
-- [ ] `command: "create"` makes a new file with `file_text`; idempotent on identical re-create (no error, no-op).
-- [ ] `command: "str_replace"` succeeds when `old_str` matches exactly once.
-- [ ] `command: "str_replace"` fails with `target_not_found, closest_match: "<line>"` when `old_str` is missing.
-- [ ] `command: "str_replace"` fails with `target_not_found, multiple_matches: N` when `old_str` matches twice.
-- [ ] `command: "insert"` with `insert_line: 0` prepends; `insert_line: N` inserts after line N (1-indexed inclusive).
-- [ ] **Sensitive-path warnings** — editing `~/.ssh/config` adds the warning; `/etc/foo`, `~/.aws/credentials`, etc. likewise.
-- [ ] **Response snippet** — returned content is ±4 lines of context around the edit per spec.
+### text_editor.edit — RETIRED by ADR-0013 (tool removed; Claude Code's native Edit/Write covers file mutation)
+_Kept only as a historical record._
+- [ ] ~~`command: "create"` makes a new file with `file_text`; idempotent on identical re-create (no error, no-op).~~
+- [ ] ~~`command: "str_replace"` succeeds when `old_str` matches exactly once.~~
+- [ ] ~~`command: "str_replace"` fails with `target_not_found, closest_match: "<line>"` when `old_str` is missing.~~
+- [ ] ~~`command: "str_replace"` fails with `target_not_found, multiple_matches: N` when `old_str` matches twice.~~
+- [ ] ~~`command: "insert"` with `insert_line: 0` prepends; `insert_line: N` inserts after line N (1-indexed inclusive).~~
+- [ ] ~~**Sensitive-path warnings** — editing `~/.ssh/config` adds the warning; `/etc/foo`, `~/.aws/credentials`, etc. likewise.~~
+- [ ] ~~**Response snippet** — returned content is ±4 lines of context around the edit per spec.~~
 
-### wait
-- [ ] `condition: "seconds", seconds: 1.5` blocks ~1.5s then returns `matched: true, elapsed_ms: ~1500`.
-- [ ] `condition: "window_appears", match: {class: "kcalc"}` — open `kcalc` within 5s, tool returns `matched: true, matched_window: {ref, class}`.
-- [ ] `condition: "window_disappears"` — close a window, returns `matched: true`.
-- [ ] `condition: "element_appears", element_match: {role: "PushButton", name_pattern: "OK"}` — opens a dialog with an OK button, returns when it appears.
-- [ ] `condition: "screen_change", pixel_threshold: 0.05` — diff frames against initial; returns when pixel-diff exceeds threshold.
-- [ ] **Timeout** — `timeout_ms: 500` against a condition that never matches returns `timeout` with `closest_match` and `current_windows`.
+### wait — RETIRED by ADR-0013 (tool removed; the host's `sleep` plus a `window_query` poll loop cover it)
+_Kept only as a historical record._
+- [ ] ~~`condition: "seconds", seconds: 1.5` blocks ~1.5s then returns `matched: true, elapsed_ms: ~1500`.~~
+- [ ] ~~`condition: "window_appears", match: {class: "kcalc"}` — open `kcalc` within 5s, tool returns `matched: true, matched_window: {ref, class}`.~~
+- [ ] ~~`condition: "window_disappears"` — close a window, returns `matched: true`.~~
+- [ ] ~~`condition: "element_appears", element_match: {role: "PushButton", name_pattern: "OK"}` — opens a dialog with an OK button, returns when it appears.~~
+- [ ] ~~`condition: "screen_change", pixel_threshold: 0.05` — diff frames against initial; returns when pixel-diff exceeds threshold.~~
+- [ ] ~~**Timeout** — `timeout_ms: 500` against a condition that never matches returns `timeout` with `closest_match` and `current_windows`.~~
 
 ### read_text (OCR)
 - [ ] **Tesseract installed via the install script.** `which tesseract` returns a path.
@@ -131,7 +127,7 @@ The user-facing claim: `kde-mcp --mode=virtual --vnc=5910` spawns an isolated KD
 - [ ] **xkbcommon keymap-aware typing** — change system keymap to dvorak; `keyboard.type "asdf"` types the correct characters per dvorak layout (not qwerty).
 - [ ] **Non-US character support** — type `'é'` directly without falling back to clipboard-paste.
 - [ ] **Real SHA-256 in audit redactor** — `clipboard_write {content: "secret"}` audit record has `args.content.sha256` matching `sha256("secret")` (not the placeholder hash).
-- [ ] **Sensitive-path coverage audit** — `text_editor.edit` warnings on every path in `~/.ssh/`, `~/.gnupg/`, `/etc/`, `~/.config/keepassxc/`, `~/.config/git/`, `~/.aws/`, `~/.kube/`.
+- [ ] ~~**Sensitive-path coverage audit** — `text_editor.edit` warnings on sensitive paths (`~/.ssh/`, `~/.gnupg/`, `/etc/`, …)~~ — RETIRED by ADR-0013 (the `text_editor` tool and its sensitive-path guard were removed).
 - [ ] **mouse hold / down / up / hold_key** — implemented (Phase 6 deferred from Phase 2).
 - [ ] **mouse modifier+click** — implemented via combined keyboard+pointer EIS session.
 - [ ] **Long-running EIS connection** option (env var or config) replaces per-call handshake; measure latency savings.
@@ -142,7 +138,7 @@ The user-facing claim: `kde-mcp --mode=virtual --vnc=5910` spawns an isolated KD
 
 - [ ] **Audit log contains every destructive tool call** with wire name. Tail-f during a 5-minute session and confirm.
 - [ ] **Trust-wrapper coverage** — grep every response struct's `Tagged<String>` fields; manually verify each is `external` when the source is external, `trusted` when it's from an OS API.
-- [ ] **Schema sanity** — `tools/list` over the wire returns 16 tools, every input schema has `required` array where applicable, all `annotations` are correctly set.
+- [ ] **Schema sanity** — `tools/list` over the wire returns 12 tools, every input schema has `required` array where applicable, all `annotations` are correctly set.
 - [ ] **Concurrent calls** — fire two tool calls back-to-back via the JSON-RPC wire. Both should serialize cleanly; second tool's audit record arrives after the first.
 - [ ] **Bus disconnect recovery** — restart `kwin_wayland` while server is running. Next tool call returns `bus_disconnected`. Server stays alive; subsequent calls work after KWin reconnects.
 - [ ] **`.mcpb` extension bundle** — `cargo install --path . --root ~/.local`, then `claude plugin install ~/.local/bin/kde-mcp` (when this packaging exists).

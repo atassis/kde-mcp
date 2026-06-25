@@ -13,11 +13,11 @@ Tests AT-SPI introspection + keyboard.type on a real browser. Doesn't actually n
 1. `mcp__kde-mcp__window_query` with `{"action":"list","format":"full"}`. Save to `runs/$run_id/S6-windows.json`.
 2. Find a window whose `class` contains `brave-browser` (case-insensitive). Record its `uuid`. If none: skip with `skipped(precondition: Brave not running)`.
 3. `mcp__kde-mcp__window_control` with `{"action":"focus","window_uuid":"<uuid>"}`.
-4. `mcp__kde-mcp__wait` with `{"condition":"seconds","seconds":0.3}` (let focus settle).
+4. Host-side `sleep 0.3` (let focus settle).
 5. `mcp__kde-mcp__keyboard.key` with `{"chord":"ctrl+l"}` (focus address bar; Brave's URL bar shortcut).
-6. `mcp__kde-mcp__wait` with `{"condition":"seconds","seconds":0.2}`.
+6. Host-side `sleep 0.2`.
 7. `mcp__kde-mcp__keyboard.type` with `{"text":"kde-mcp-marker-${run_id}"}`.
-8. `mcp__kde-mcp__wait` with `{"condition":"seconds","seconds":0.3}` (let AT-SPI settle).
+8. Host-side `sleep 0.3` (let AT-SPI settle).
 9. `mcp__kde-mcp__inspect` with `{"target":"window:<uuid>"}`. Save to `runs/$run_id/S6-inspect.json`.
 10. Search the inspect response for elements where `role` is `entry`, `text`, `textbox`, or similar AND `value` contains the marker substring `kde-mcp-marker-${run_id}`.
 

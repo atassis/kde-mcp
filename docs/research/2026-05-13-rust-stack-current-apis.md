@@ -238,7 +238,7 @@ let (_connection, mut events) = context
 - The reis README says the API is still subject to change. For a personal-use project this is acceptable, but: **pin `reis = "=0.6.1"` exactly**, not `"0.6"`. A minor bump might rename `EiEventStream`.
 - `handshake_tokio` was added relatively recently (the older `reis::tokio::ei_handshake(&mut events, …)` free function is also still present per `list-devices.rs`). Either works; prefer `handshake_tokio` for ergonomics.
 - The `calloop` examples (`type-text.rs`, `reis-demo-server.rs`) are richer than the tokio ones but require a calloop event loop. We're tokio-only per ADR-0001, so we won't use them as reference. Read them only for the protocol-level dispatch logic.
-- The crate has 31 GitHub stars and "4 open issues, 5 open PRs". This is a small library. Expect to read the source when something doesn't match the README. The author (`ids1024`) is the same as the maintainer of `cosmic-comp`'s input layer — competent, but bus-factor of 1.
+- The crate has a low star count and only a handful of open issues/PRs. This is a small library. Expect to read the source when something doesn't match the README. It has a small maintainer team — worth tracking for long-term maintenance.
 - The spec's §5.6 line "One `reis::Context`" is correct in name. Add: "Plus a long-lived `EiEventStream` consumer task and a shared `Arc<EiState>` for the bound capabilities."
 
 ---

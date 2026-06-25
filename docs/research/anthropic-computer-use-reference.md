@@ -1,6 +1,8 @@
 # Anthropic Computer Use — Reference Notes
 
-Collated facts about Anthropic's Computer Use tool, captured here so the design doc can stay focused. All quoted strings are verbatim from official docs or the reference implementation at `anthropics/anthropic-quickstarts/computer-use-demo`.
+Collated facts about Anthropic's Computer Use tool, captured here so the design doc can stay focused.
+
+> **Attribution & licensing.** Code snippets in this note are derived from Anthropic's MIT-licensed `anthropic-quickstarts` repository (https://github.com/anthropics/anthropic-quickstarts), specifically its `computer-use-demo` reference implementation. Prose passages are paraphrased summaries of Anthropic's public documentation (https://platform.claude.com/docs), reproduced here for reference; the linked originals are authoritative.
 
 ---
 
@@ -86,9 +88,9 @@ Per-action contract:
 
 Origin **top-left**. Pixel integers, two-element array `[x, y]`. Validation in `computer.py`: `"coordinate must be a tuple of length 2"`, `"must be a tuple of non-negative ints"`.
 
-### Official scaling rule (verbatim)
+### Official scaling rule (paraphrased)
 
-> "The API constrains images to a maximum of **1568 pixels on the longest edge** and approximately **1.15 megapixels total**. ... Claude analyzes this smaller image and returns coordinates in that space, but your tool executes clicks in the original screen space."
+Anthropic's docs: the API constrains images to ~1568 px on the longest edge and ~1.15 MP total; Claude returns coordinates in that scaled space and your tool maps them back to original screen space. (Anthropic computer-use tool docs.)
 
 Official formula:
 
@@ -103,9 +105,9 @@ def get_scale_factor(width, height):
 
 You **resize before sending** and **divide by `scale` when executing clicks** (model coords → screen coords: `screen_x = x / scale`).
 
-### Opus 4.7 exception (verbatim)
+### Opus 4.7 exception (paraphrased)
 
-> "Claude Opus 4.7 supports up to 2576 pixels on the long edge, and its coordinates are 1:1 with image pixels (no scale-factor conversion required). The 1568-pixel guidance below applies to earlier models."
+Per Anthropic's docs, Opus 4.7 supports up to 2576 px on the long edge with 1:1 image-pixel coordinates (no scale-factor conversion); the 1568 px guidance applies to earlier models.
 
 ### Reference implementation's actual scaling (different, more conservative)
 
@@ -119,11 +121,9 @@ MAX_SCALING_TARGETS = {
 
 Algorithm: find target whose aspect ratio is within 0.02 of source, scale to it if source is larger. Uses ImageMagick `convert {path} -resize {x}x{y}!`. **The model only sees the scaled-down dimensions** as `display_width_px/display_height_px`.
 
-### Doc-recommended targets
+### Doc-recommended targets (paraphrased)
 
-> "general desktop tasks: 1024x768 or 1280x720"
-> "web applications: 1280x800 or 1366x768"
-> "Avoid resolutions above 1920x1080 to prevent performance issues"
+Anthropic's docs recommend 1024×768 or 1280×720 for general desktop tasks and 1280×800 or 1366×768 for web apps, and advise against resolutions above 1920×1080 for performance.
 
 ---
 
@@ -236,7 +236,7 @@ Thinking blocks preserved across turns with `signature` field.
 
 ## MCP relation
 
-> "Computer use is a **client-side tool**. All screenshots, mouse actions, keyboard inputs, and any files involved in a session are captured and stored in your environment, not by Anthropic."
+Per Anthropic's docs, computer use is a **client-side tool**: all screenshots, mouse/keyboard actions, and session files are captured and stored in your own environment, not by Anthropic.
 
 Computer use is **not** an MCP server. It is a first-party Anthropic tool schema baked into the model. The execution side (xdotool/scrot/etc) lives in the developer's environment. That makes it a natural fit for an MCP server *to expose the same action surface* — but the native `computer_*` type itself cannot be transported through MCP.
 

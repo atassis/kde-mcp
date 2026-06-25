@@ -1,6 +1,6 @@
 # Singleton Daemon Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> Historical planning artifact — captures the plan as written on the date in the filename; the shipped implementation is the source of truth (see the ADRs and the design spec).
 
 **Goal:** Add a long-running daemon mode that serves MCP over HTTP on `127.0.0.1:7575`, replacing the per-Claude-Code-session subprocess explosion (one tray icon, one AT-SPI subscription, one KWin script connection per user instead of one per session). Stdio mode is preserved as a co-equal peer for headless/CI. Implements `docs/specs/2026-05-15-singleton-daemon-design.md` + ADR-0012.
 
@@ -2033,7 +2033,7 @@ case "$TRANSPORT" in
     ;;
   stdio)
     echo "Done (stdio mode)."
-    echo "  Open a fresh Claude Code session to pick up the new server."
+    echo "  Restart your MCP client session to pick up the new server."
     ;;
 esac
 ```

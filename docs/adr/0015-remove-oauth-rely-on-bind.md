@@ -14,7 +14,7 @@ The "Trust model" section of ADR-0014 already conceded — explicitly — that O
 > - Different-UID local process: defeated by the 127.0.0.1 bind. Unchanged.
 > - External attacker: defeated by the 127.0.0.1 bind. Unchanged.
 
-A same-UID process can auto-complete the `/oauth/authorize` endpoint anyway (it has no consent gesture — it's auto-approve, since the only trust signal is "the request reached us on the loopback bind"). The bearer simply gates the bearer-holder, who is the same person/process the OAuth flow just issued the bearer to. It is protocol theater.
+A same-UID process can auto-complete the `/oauth/authorize` endpoint anyway (it has no consent gesture — it's auto-approve, since the only trust signal is "the request reached us on the loopback bind"). The bearer simply gates the bearer-holder, who is the same person/process the OAuth flow just issued the bearer to. It adds no security here.
 
 Two days of running with the OAuth code revealed the maintenance cost:
 
@@ -29,7 +29,7 @@ That's three Claude-Code-version-sensitive breakpoints inside two days. Every Cl
 
 ## The empirical pivot
 
-On 2026-05-18 we built a minimal Python MCP server with **no auth** and **no `/.well-known/oauth-*` endpoints** (`/tmp/noauth-mcp-prober.py`), registered it as a Claude Code MCP entry, and ran a one-shot Claude Code subprocess against it. Result, logged at `~/.cache/claude-cli-nodejs/<repo>/mcp-logs-kde-mcp-noauth-test/2026-05-18T14-27-16-338Z.jsonl:14`:
+On 2026-05-18 we built a minimal Python MCP server with **no auth** and **no `/.well-known/oauth-*` endpoints**, registered it as a Claude Code MCP entry, and ran a one-shot Claude Code subprocess against it. Result, logged in Claude Code's MCP client logs:
 
 ```
 "Successfully connected (transport: http) in 23ms"
@@ -90,15 +90,15 @@ OAuth contributed nothing to any of these. Dropping it does not regress the mode
 
 ## Alternatives considered
 
-1. **Keep ADR-0014 as-is.** Rejected: protocol theater, ongoing maintenance.
+1. **Keep ADR-0014 as-is.** Rejected: adds no security here, and ongoing maintenance cost.
 2. **Ship `--transport=unix`-only and wait for Claude Code `unix://` support.** Tempting, but the upstream change is out of our hands. Until that lands we still want HTTP-on-loopback to work for the user's actual daily workflow. Drop the auth on the HTTP transport; keep the Unix transport ready to flip on.
 3. **Implement a minimal bearer that's never advertised via `/.well-known`.** Worse than this option in every dimension: still maintains shared-secret sync logic, gives the same zero security on the threat model, and trips Claude Code's "needs-auth" detection.
 
 ## Verification
 
 Empirical test artefacts:
-- `/tmp/noauth-mcp-prober.py` — Python MCP server with no auth.
-- `~/.cache/claude-cli-nodejs/<repo>/mcp-logs-kde-mcp-noauth-test/2026-05-18T14-27-16-338Z.jsonl` — Claude Code's 23 ms unauth connect log.
+- A minimal no-auth Python MCP server used as the prober.
+- Claude Code's MCP client log showing the 23 ms unauthenticated connect.
 - `tests/integration/daemon_http.rs::http_initialize_returns_serverinfo` already covered the unauth happy path; no new tests needed for the deletion.
 
 ## How to apply

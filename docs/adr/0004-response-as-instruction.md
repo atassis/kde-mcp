@@ -52,9 +52,7 @@ The agent demonstrably attends more strongly to recent tokens than to system-pro
 
 ## Source for the principle name
 
-Articulated by the user during the design conversation on 2026-05-13:
-
-> "by response and info in that LLM can logically get to the point it needs to get instead of being said once in prompt in tools somewhere. For example, by 'diff' param it will react to that statement per moment instead of relying on a paragraph far away in context"
+The principle crystallised during design: an agent steers more reliably on information delivered *in the response it just received* than on instructions stated once, far back in a tool description. A `diff` field returned alongside the action lets the agent react to the change in the moment, rather than relying on a paragraph it read many turns ago.
 
 Generalisation of patterns documented in:
 - Anthropic — Writing tools for agents

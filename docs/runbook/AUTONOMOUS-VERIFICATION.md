@@ -1,6 +1,6 @@
 # Autonomous verification runbook — kde-mcp
 
-A fresh Claude Code session should be able to verify kde-mcp end-to-end by reading this file top-to-bottom and executing each step. Auto-fix is mechanical only — see `KNOWN-FIXES.md`. There is no AI debug loop; novel failures get logged and the run continues.
+This protocol is machine-executable: an agent (or a script) can verify kde-mcp end-to-end by reading this file top-to-bottom and executing each step. Auto-fix is mechanical only — see `KNOWN-FIXES.md`. There is no AI debug loop; novel failures get logged and the run continues.
 
 **Design spec:** `docs/specs/2026-05-15-verification-runbook-design.md`.
 
@@ -62,14 +62,14 @@ Cheap, no live side-effects. Aborts the run on failure.
 
 ### L1.2 — Cargo test suite green
 **TC-Ref:** n/a
-**Goal:** Hermetic tests pass; in particular, the 16-tool wire-name assertion holds.
+**Goal:** Hermetic tests pass; in particular, the 12-tool wire-name assertion holds.
 **Pre:** Repo working tree clean (else log and continue with warning).
 **Depends-on:** L1.1
 **Steps:**
 1. `bash`: `cargo test --workspace 2>&1 | tail -10`
-**Accept:** Each of the four `test result` lines shows `ok. .* 0 failed`. Total: 110+ passing.
+**Accept:** Each of the four `test result` lines shows `ok. .* 0 failed`. Total: 146+ passing.
 **Artefacts:** `L1.2-cargo-test.log` (full output).
-**On fail:** if output contains `expected 16 wire tool names` → F9 (abort, runbook outdated). Else log full output, mark failed, **abort run** — there's no point verifying live behavior of broken code.
+**On fail:** if output contains `expected 12 wire tool names` → F9 (abort, runbook outdated). Else log full output, mark failed, **abort run** — there's no point verifying live behavior of broken code.
 **Cleanup:** none.
 
 ### L1.3 — .desktop file authorises ScreenShot2
@@ -119,7 +119,7 @@ Cheap, no live side-effects. Aborts the run on failure.
    - `kwin_wayland --version` (one line)
    - `xrandr --listmonitors` (multiple lines)
    - `kde-mcp --version 2>/dev/null || echo unknown` (one line)
-   - `git -C ~/repositories/ns/atassis/kde-mcp rev-parse --short HEAD`
+   - `git -C <repo-root> rev-parse --short HEAD`
 2. Combine into a JSON object: `{plasma: "...", kwin: "...", monitors: [...], kde_mcp_version: "...", repo_sha: "..."}`.
 3. Write to `runs/$run_id/env.json`.
 **Accept:** File exists, parses as valid JSON, has all five keys.

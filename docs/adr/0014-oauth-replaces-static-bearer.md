@@ -1,6 +1,6 @@
 # ADR-0014: Daemon is the OAuth 2.1 authorization server for its own MCP resource
 
-**Status:** Superseded by [[0015-remove-oauth-rely-on-bind]] (2026-05-18). The OAuth layer was protocol theater for our threat model — Claude Code 2.1.139 happily connects to an unauthenticated `/mcp` when the server doesn't advertise OAuth discovery.
+**Status:** Superseded by [[0015-remove-oauth-rely-on-bind]] (2026-05-18). The OAuth layer added no security for this threat model — Claude Code 2.1.139 connects to an unauthenticated `/mcp` when the server doesn't advertise OAuth discovery.
 
 *Originally accepted 2026-05-16.*
 
@@ -14,7 +14,7 @@ A year on, both the protocol and the client have moved:
 
 1. **MCP spec 2025-11-25 mandates OAuth 2.1** (RFC 6749 / 8414 / 9728) for HTTP transports. Servers must serve `/.well-known/oauth-protected-resource`. Clients are expected to do the OAuth dance at MCP-connect time. The static-bearer pattern is non-conformant for any spec ≥ 2025-06-18.
 
-2. **Claude Code 2.1.139 already drives that flow.** Per `~/.cache/claude-cli-nodejs/<repo>/mcp-logs-kde-mcp/2026-05-16T08-38-58-356Z.jsonl`:
+2. **Claude Code 2.1.139 already drives that flow.** Per the Claude Code MCP client logs:
    ```
    "HTTP transport options": { ..., "hasAuthProvider": true }
    "HTTP 401: Invalid OAuth error response: SyntaxError: JSON Parse error: Unexpected EOF. Raw body: "
@@ -110,12 +110,6 @@ If the different-UID-local-process threat ever matters, the fix is `SO_PEERCRED`
 - A same-UID-different-UID-local attacker now needs one fewer step. Acknowledged in the threat-model note above. We accept it because personal-use single-user.
 - `packaging/install.sh` becomes simpler, but anyone running the old install.sh against this version will leave a stale `Authorization` header in `~/.claude.json`. The new install.sh should `claude mcp remove kde-mcp` before `claude mcp add` to flush. Documented in the ADR's implementation notes.
 - Existing live deployments need `install.sh` re-run **once** after the upgrade to remove the now-spurious bearer header.
-
-**Neutral / housekeeping:**
-
-- Memory `reference-claude-code-mcp-caveats` updates: §1 (HTTPS_PROXY) stays; remove the bearer-file paragraph.
-- Memory `project-daemon-deployment-state` updates: drop the "Token is rotatable" recipe, drop the `$XDG_RUNTIME_DIR/kde-mcp/token` mention.
-- HANDOFF.md updates: note that `~/.claude.json` no longer carries a token after ADR-0014.
 
 ## Alternatives considered
 

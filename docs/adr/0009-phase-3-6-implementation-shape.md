@@ -4,10 +4,10 @@
 
 ## Context
 
-Phases 3–6 were implemented in a single autonomous push after Phase 2.
+Phases 3–6 were implemented in one pass after Phase 2.
 Several design micro-decisions were taken in flight that aren't covered
-by the existing ADRs and need recording so a future reviewer doesn't
-have to read commit messages to understand the shape.
+by the existing ADRs and are recorded here so the shape is clear from
+the ADRs alone.
 
 ## Decisions
 

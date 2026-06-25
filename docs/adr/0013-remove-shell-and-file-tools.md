@@ -100,6 +100,6 @@ The rule does **not** kill the borderline-call tools listed above (`clipboard_*`
 - Update `tests/integration/tools_list.rs::server_advertises_sixteen_tools_with_expected_names` to advertise twelve.
 - Remove `BashArgs`/`BashResponse`/`TextEditor*Args`/`Wait*Args` JSON-schema surface; check no resource_link generators referenced these types.
 - Strip §6 entries from the spec; update §4.4 to drop the "use bash to launch one" hint; update §11.8 (blocklist) to note it's retired with bash.
-- Update HANDOFF.md "Loose threads" to mark the L2.15 bug moot and to record this ADR.
+- Mark the L2.15 bug (bash PTY parser) moot — the tool it affected no longer exists.
 
 A clean implementation should be < 500 lines net deletion across `src/` and `tests/`, plus the spec/docs updates.

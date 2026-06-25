@@ -56,7 +56,7 @@ Total: ~8–9 working days of additional MVP scope.
 
 ## Consequences
 
-- **MVP grows from 12–16 working days to 18–23 working days** (5–7 calendar weeks at part-time pace). User accepted.
+- **MVP grows from 12–16 working days to 18–23 working days** (5–7 calendar weeks at part-time pace) — a deliberate trade of scope for quality.
 - **New cross-cutting subsystem**: `src/policy.rs` plus thin helpers `src/lock.rs`, `src/notify.rs`, `src/cancel.rs`. Each destructive tool wraps its execution in a single `policy.gate(...)` call. Adding new destructive tools is a one-line addition to the gate-wrapped pattern.
 - **New error codes**: `tier_restricted`, `app_approval_required`, `cancelled`, `lock_unavailable` (see spec §8).
 - **New config surface**: `~/.config/kde-mcp/policy.toml`. Ships with sensible defaults; user-overridable.
@@ -65,7 +65,7 @@ Total: ~8–9 working days of additional MVP scope.
 
 ## Alternatives considered
 
-- **Skip all safety features beyond the original five layers.** Rejected by user — they explicitly asked for the upgrade, willing to spend the extra time.
+- **Skip all safety features beyond the original five layers.** Rejected — the upgrade was a deliberate choice, accepting the extra time.
 - **Adopt a subset (e.g., just lock + tiering, skip per-app approval).** Considered but rejected: per-app approval is the most user-visible safety property in Anthropic's design; skipping it would leave the most obvious gap.
 - **Implement features ad-hoc per tool rather than centralised gate.** Rejected: security-critical code should not be scattered. The gate gives us one place to audit, test, and extend.
 
@@ -77,8 +77,4 @@ Total: ~8–9 working days of additional MVP scope.
 
 ## Source
 
-Articulated during the design conversation on 2026-05-13 after fetching the Claude Code computer-use documentation at https://code.claude.com/docs/en/computer-use. The user's framing:
-
-> "Can we upgrade our design with all features if we really can reimplement them? Think about what can we done and what is too difficult to implement. I am ready to spend more time on MVP but to get a really good result, close in quality to anthropics product or even better."
-
-This ADR records the triage and the commit to building the six adopted features in MVP.
+This ADR follows a design review of the Claude Code computer-use documentation (https://code.claude.com/docs/en/computer-use) on 2026-05-13. The driving question: could the safety features be reimplemented on KDE primitives at acceptable cost? The decision was to spend more MVP time in exchange for a result close to — or better than — Anthropic's in quality. This ADR records the triage and the commitment to build the six adopted features in MVP.

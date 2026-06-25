@@ -58,8 +58,4 @@ The read-only set autoapproves in Claude Code's default permission mode. The des
 
 ## Source
 
-Articulated during the design conversation. The user's stated philosophy:
-
-> "I want MCPs to have most functionality, but with least amount of tools, but so each tool is as useful as it can be. ... if we can provide not a screenshot, but a list of windows, screens, etc programmatically — we do that instead of giving a bunch of screenshots"
-
-That maps directly onto D — combined with Playwright-MCP's a11y-first philosophy and Anthropic's "consolidate along intent, split along safety" principle.
+The guiding philosophy: maximise functionality while minimising tool count, and make each tool as useful as it can be — and wherever a programmatic answer exists (a list of windows or screens) prefer it over a screenshot. That maps directly onto D — combined with Playwright-MCP's a11y-first philosophy and Anthropic's "consolidate along intent, split along safety" principle.

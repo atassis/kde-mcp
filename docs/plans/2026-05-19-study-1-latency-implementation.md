@@ -1,6 +1,6 @@
 # Study 1 — Latency Profile Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> Historical planning artifact — captures the plan as written on the date in the filename; the shipped implementation is the source of truth (see the ADRs and the design spec).
 
 **Goal:** Add per-phase latency instrumentation to kde-mcp's audit log and a TypeScript analyzer that emits a markdown report from `audit.jsonl`.
 

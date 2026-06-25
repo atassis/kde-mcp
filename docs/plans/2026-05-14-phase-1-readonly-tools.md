@@ -1,6 +1,6 @@
 # kde-mcp Phase 1 — Read-only Tools Against Live Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use `superpowers:subagent-driven-development` (recommended) or `superpowers:executing-plans` to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> Historical planning artifact — captures the plan as written on the date in the filename; the shipped implementation is the source of truth (see the ADRs and the design spec).
 
 **Goal:** Replace the six read-only tool stubs (`text_editor.view`, `clipboard_read`, `window_query`, `screenshot`, `inspect`, `observe`) with working live-mode implementations against the user's real KDE Plasma 6 / Wayland session. Wire every tool's dispatch through the audit log. Ship terminal-class masking for `screenshot` as defense-in-depth before the Phase 3 policy gate exists.
 
@@ -23,7 +23,7 @@
 
 Three pre-plan decisions, two clean and one with a sharp edge:
 
-1. **KWin Scripting output capture → caller-hosted D-Bus receiver, kdotool-style.** The HANDOFF labelled this option "write-to-temp-file", but KWin's QJSEngine has **no file I/O globals** — `QFile` / `QTextStream` / `writeFile` are not registered. The only escape hatch from the script sandbox is `callDBus`. The actual mechanism kdotool uses, and what this plan implements, is: caller opens its own session-bus connection, registers a per-invocation interface (`org.kde.kdemcp.ScriptSink1.S<uuid>`) on a unique object path, embeds that name into the generated JS, the script calls back via `callDBus`, caller awaits a single result message with a timeout. This avoids the journald scrape (rate-limited, racy) and stays scoped to one method per script invocation — not a long-lived service. **~60 lines of Rust** total in `src/kwin/scripting.rs`. The HANDOFF's "heavyweight" objection to "kdotool round-trip" was based on kdotool's old Python-mediated design; in zbus it's lighter than the journald fallback.
+1. **KWin Scripting output capture → caller-hosted D-Bus receiver, kdotool-style.** The earlier design notes labelled this option "write-to-temp-file", but KWin's QJSEngine has **no file I/O globals** — `QFile` / `QTextStream` / `writeFile` are not registered. The only escape hatch from the script sandbox is `callDBus`. The actual mechanism kdotool uses, and what this plan implements, is: caller opens its own session-bus connection, registers a per-invocation interface (`org.kde.kdemcp.ScriptSink1.S<uuid>`) on a unique object path, embeds that name into the generated JS, the script calls back via `callDBus`, caller awaits a single result message with a timeout. This avoids the journald scrape (rate-limited, racy) and stays scoped to one method per script invocation — not a long-lived service. **~60 lines of Rust** total in `src/kwin/scripting.rs`. The earlier "heavyweight" objection to "kdotool round-trip" was based on kdotool's old Python-mediated design; in zbus it's lighter than the journald fallback.
 
 2. **`window_query` default grouping → flat list with `screen` per entry, `format: "ids" | "titles" | "full"` controls fields.** Per the user's #2 approval. The JS payload always emits the same shape; the Rust layer projects down to the requested `format`.
 
@@ -3061,15 +3061,15 @@ cargo build --release
 
 Expected: all pass against the live KDE Plasma 6 session.
 
-- [ ] **Step 14.4: Update `docs/HANDOFF.md`**
+- [ ] **Step 14.4: Update the README status**
 
-Mark Phase 1 as the new "complete" state in §"Current status"; pivot "What is NOT yet done" so Phase 2 is the next concrete step; update the recipes section.
+Mark Phase 1 as the new "complete" state in the README's "Current status" section; pivot "What is NOT yet done" so Phase 2 is the next concrete step; update the recipes section.
 
 - [ ] **Step 14.5: Commit and tag**
 
 ```bash
-git add docs/HANDOFF.md tests/integration/SMOKE.md
-git commit -m "docs(phase-1): mark complete; pivot handoff to Phase 2"
+git add README.md tests/integration/SMOKE.md
+git commit -m "docs(phase-1): mark complete; pivot status to Phase 2"
 git tag phase-1
 ```
 
@@ -3077,7 +3077,7 @@ git tag phase-1
 
 ## Self-review
 
-**Spec coverage:** every tool in spec §14 Phase 1 row (`observe`, `inspect`, `window_query`, `screenshot` w/ terminal masking, `clipboard_read`, `text_editor.view`) has a Task implementing it (3, 4, 6, 8+10, 12, 13). Audit-log hookup per HANDOFF "Phase 1's first task" landed as Task 2. The §4.7 trust-discriminator wrapping is enforced on every external-content field across all responses (audited by reviewing each `Tagged<>` site in Task 14.2's fmt/clippy pass).
+**Spec coverage:** every tool in spec §14 Phase 1 row (`observe`, `inspect`, `window_query`, `screenshot` w/ terminal masking, `clipboard_read`, `text_editor.view`) has a Task implementing it (3, 4, 6, 8+10, 12, 13). Audit-log hookup (Phase 1's first task) landed as Task 2. The §4.7 trust-discriminator wrapping is enforced on every external-content field across all responses (audited by reviewing each `Tagged<>` site in Task 14.2's fmt/clippy pass).
 
 **Placeholder scan:** the two remaining "not implemented" returns are spec-deferred:
 - `inspect target=window:<ref>` (Task 12) — Phase 4 absorbs window→AT-SPI app mapping.
@@ -3095,15 +3095,9 @@ If you spot a gap not covered by a task above, add the task before starting Task
 
 ---
 
-## Execution handoff
+## Recommended sequence
 
-Plan complete and saved to `docs/plans/2026-05-14-phase-1-readonly-tools.md`. Two execution options:
-
-**1. Subagent-Driven (recommended)** — dispatch a fresh subagent per task, review between tasks, fast iteration.
-
-**2. Inline Execution** — execute tasks in this session using `superpowers:executing-plans`, batch execution with checkpoints.
-
-User pre-approved going autonomously on the parts that don't touch live session state. Recommended sequence in user's absence:
+The parts that don't touch live session state can be implemented first:
 
 - Task 0 (spikes) — read-only web fetches + one `busctl introspect` + one `wl-paste --list-types`. Safe to run; doesn't mutate the user's session.
 - Task 1 (Cargo.toml + module skeleton) — pure local edits.

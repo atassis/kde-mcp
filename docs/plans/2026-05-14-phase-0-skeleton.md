@@ -1,6 +1,6 @@
 # kde-mcp Phase 0 — Skeleton + Spikes Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use `superpowers:subagent-driven-development` (recommended) or `superpowers:executing-plans` to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> Historical planning artifact — captures the plan as written on the date in the filename; the shipped implementation is the source of truth (see the ADRs and the design spec).
 
 **Goal:** Produce a working `kde-mcp` binary that (a) registers with Claude Code, (b) exposes all 15 MCP tools and returns `not_implemented` for each, (c) has a complete error taxonomy, JSONL audit log, single-session lockfile, KDE acquire/release notifications, and (d) ships with five executed spike notes that verify load-bearing API assumptions before Phase 1.
 
@@ -164,7 +164,7 @@ Initialise the crate, pin dependencies, set MSRV.
 - [ ] **Step 1.1: `cargo init`**
 
 ```bash
-cd ~/repositories/ns/atassis/kde-mcp
+cd ~/path/to/kde-mcp
 cargo init --name kde-mcp --bin --vcs none
 ```
 
@@ -2417,9 +2417,9 @@ git add docs/specs/2026-05-13-kde-computer-use-mcp-design.md  # only if edited
 git commit -m "docs(spec): note current wire-protocol version per Phase 0 Spike 0.1"
 ```
 
-- [ ] **Step 14.4: Update HANDOFF.md**
+- [ ] **Step 14.4: Update the README status**
 
-The HANDOFF.md says Phase 0 is the next step. Update its "Current status" section to record that Phase 0 has shipped:
+Update the README's "Current status" section to record that Phase 0 has shipped:
 
 ```markdown
 ## Current status (2026-05-14)
@@ -2431,8 +2431,8 @@ The HANDOFF.md says Phase 0 is the next step. Update its "Current status" sectio
 ```
 
 ```bash
-git add docs/HANDOFF.md
-git commit -m "docs(handoff): mark Phase 0 complete; Phase 1 is the next step"
+git add README.md
+git commit -m "docs(readme): mark Phase 0 complete; Phase 1 is the next step"
 ```
 
 - [ ] **Step 14.5: Tag the Phase 0 release**
@@ -2512,14 +2512,3 @@ No `TBD`, no `TODO`, no "implement later" in the plan. Each step has either runn
 - `notify_lock_acquired` / `notify_lock_released` introduced in Task 7; referenced in Task 12.
 
 No drift detected.
-
----
-
-## Execution handoff
-
-Plan complete and saved to `docs/plans/2026-05-14-phase-0-skeleton.md`. Two execution options:
-
-1. **Subagent-Driven (recommended)** — A subagent is dispatched per task; the parent reviews each completed task before moving on. Fast iteration; good for catching API surprises (the spike outputs may shift several tasks).
-2. **Inline Execution** — Tasks run sequentially in this session via `superpowers:executing-plans`, with batch execution and review checkpoints.
-
-Which approach?

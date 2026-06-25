@@ -1,6 +1,6 @@
 # Evaluation and Latency Design
 
-**Status:** Proposed — 2026-05-19. Author: atassis (with Claude).
+**Status:** Proposed — 2026-05-19. Author: atassis.
 **Supersedes:** nothing.
 **Related:** ADR-0005 (accessibility-tree first), ADR-0013 (MCP-purpose rule), spec §15 (open questions).
 
@@ -114,7 +114,7 @@ N = 1,247 tool calls across 12 tools.
 
 This is a **capability-boundary probe**, not an average-workflow benchmark. Each scenario isolates one theoretical weakness of text-only-on-AT-SPI; the goal is to classify *where* and *why* each arm breaks, not to declare a winner across average use. A reader who wants to project these findings to their own workflows must check whether those workflows hit the same boundaries.
 
-n=2 per (scenario × arm), tiebreaker n=3 on pass/fail disagreement. ~16–20 runs total against the $200/mo Max 20x credit pool.
+n=2 per (scenario × arm), tiebreaker n=3 on pass/fail disagreement. ~16–20 runs total.
 
 ### 4.2 Scenarios
 
@@ -235,7 +235,7 @@ Before authoring the rest, validate that the `computer_20251124` tool is granted
 
 Cost: ~$0.01. **Gates Phase 1.** Failure modes and responses:
 
-- `permission_denied` / `model not granted` → the Max 20x plan doesn't (yet) include this beta. Surface to user; do not proceed.
+- `permission_denied` / `model not granted` → the account/plan doesn't (yet) include this beta. Surface to user; do not proceed.
 - Network / transient API error → retry once; if still failing, surface; do not proceed.
 - Returns text instead of `tool_use` → unexpected; capture full response and surface.
 
@@ -246,7 +246,7 @@ The rest of the work does not start until smoke is green. Do not work around a r
 - **Cost cap:** `BUDGET_CAP_USD = 0.50` per `(scenario × arm × trial)`. Treated as **guardrail**; classification `timeout-budget` is reported as a finding, **not** weighed in pass/fail tally.
 - **Step cap:** `STEP_RUNAWAY_CAP = 50`. Safety only; should never fire.
 - **Trials:** `n=2` per `(scenario × arm)`. If trials disagree on pass/fail, `n=3` tiebreak. The failure-mode itself is reported per-trial (no majority on failure-mode).
-- **Total credit projection:** ~$10–18 against $200/mo Max 20x credit.
+- **Total credit projection:** ~$10–18.
 
 ### 4.9 Logging schema
 
@@ -361,7 +361,6 @@ No LLM-as-judge automated classification. Self-evaluation bias on the vision arm
 | Study 2 — 4 scenarios × 2 arms × 2 trials | ~$8–14 |
 | Tiebreaker reserve (4 scenarios × 1 extra trial worst case) | ~$2–4 |
 | **Total Study 2** | **~$10–18** |
-| **Of $200/mo Max 20x credit** | ~5–9% |
 
 Vision arm dominates cost (screenshots are tokenised as images at vision rate). kde-mcp arm's per-prompt tool-definition overhead (12 schemas) is largely amortised by prompt caching — the harness enables `cache_control: ephemeral` on the tools block, so steps 2+ pay cache-read rates (~10% of full input rate) for the definitions. Caching is reported in `usage.cache_read_input_tokens` and surfaced in `summary.md`.
 
@@ -397,4 +396,3 @@ Vision arm dominates cost (screenshots are tokenised as images at vision rate). 
 - [`docs/adr/0013-remove-shell-and-file-tools.md`](../adr/0013-remove-shell-and-file-tools.md) — Accepted. MCP-purpose rule informing the analyzer-out-of-tree choice.
 - [`docs/specs/2026-05-13-kde-computer-use-mcp-design.md`](2026-05-13-kde-computer-use-mcp-design.md) §15 — Open questions deferred at MVP.
 - [Anthropic Computer Use Tool documentation](https://platform.claude.com/docs/en/agents-and-tools/tool-use/computer-use-tool).
-- [Anthropic May 2026 Agent SDK $200 credit policy change](https://gist.github.com/MagnaCapax/d9177e35b355853f03c730dfcaa693ef).

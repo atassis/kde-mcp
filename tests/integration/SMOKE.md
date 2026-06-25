@@ -1,5 +1,7 @@
 # Phase 0 Smoke Test Procedure
 
+> Historical Phase 0/1 smoke fixtures — the tool surface was later trimmed to 12 by ADR-0013. Kept as a development record.
+
 Manual verification of the `kde-mcp` Phase 0 build against a real KDE Plasma 6 / Wayland session. Run this after every Phase 0 commit, and as the entry sanity check for Phase 1+ development.
 
 The procedure has two parts: a **scripted JSON-RPC handshake** (fast, no host required) and an optional **`claude mcp add` register-and-discover** flow (validates the host-integration path).
@@ -344,7 +346,7 @@ echo "got window uuid: $UUID"
 # verification of element: is a Phase 4 SMOKE addendum.
 ```
 
-`inspect target="focused"` and `inspect target="window:<ref>"` currently return `not_implemented` per the Phase 1 first-cut scope (recorded in HANDOFF.md and the plan's Task 12 step).
+`inspect target="focused"` and `inspect target="window:<ref>"` currently return `not_implemented` per the Phase 1 first-cut scope (see the plan's Task 12 step).
 
 ### C.7 — Audit log per call
 

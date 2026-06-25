@@ -1,68 +1,58 @@
 # kde-mcp
 
-> An MCP server that gives any AI agent the ability to observe and control a KDE Plasma 6 / Wayland desktop — through programmatic primitives (AT-SPI, KWin Scripting, libei via KWin's private EIS interface) first, screenshots only as a fallback.
+> An MCP server that lets an AI agent observe and control a KDE Plasma 6 / Wayland desktop through programmatic primitives — the accessibility tree (AT-SPI), KWin Scripting, and libei via KWin's private EIS interface — with screenshots only as a fallback.
 
-**Status:** design / specification phase. No code yet.
-**Target:** KDE Plasma 6 on Wayland, KWin. Single-user, personal use first.
-**Language:** Rust.
-**License:** MIT.
+**Status:** working MVP. All planned tools are implemented; the server runs as a systemd-user daemon and is driven daily from Claude Code.
+**Platform:** KDE Plasma 6 on Wayland (KWin). **Language:** Rust (edition 2024). **License:** MIT.
 
-## What this is
+It is the Linux/KDE counterpart to the `computer-use` capability Anthropic ships for macOS. Anthropic's version is macOS-only; this project targets KDE Plasma 6 on Wayland.
 
-The Linux/KDE equivalent of the `computer-use` MCP server Anthropic ships built into Claude Code on macOS (and Claude Desktop on macOS + Windows). Anthropic's version is research-preview + macOS-only. This project covers KDE Plasma 6 Wayland, the user's daily-driver platform.
+## What makes it different
 
-Distinguishing properties:
+- **Accessibility-tree first; pixels as fallback.** The primary action is `act_on_element`, which invokes an AT-SPI action on a referenced element — no coordinate hallucination, no input-emulation race, and roughly 5–30× cheaper than screenshot round-trips. Screenshots are an explicit escape hatch, not the default loop. (ADR-0005)
+- **Response-as-instruction.** Decision-relevant information is carried in structured response fields, not in tool-description prose — the agent reacts to a `diff` in the moment instead of a paragraph far back in context. (ADR-0004)
+- **Native to KDE/Wayland, no portal dialogs.** Input goes through `org.kde.KWin.EIS.RemoteDesktop` (libei), capture through `org.kde.KWin.ScreenShot2`, window control through `org.kde.KWin.Scripting`. No Xvfb, no Docker, no xdotool, no interactive portal prompts.
+- **One mode per process.** `--mode=live` drives the real desktop; `--mode=virtual` spawns a headless `kwin_wayland --virtual` session (optionally watchable over VNC) for isolated automation. No runtime mode-swapping, so there is no dual-context misrouting to reason about. (ADR-0003)
+- **A deliberately small, safety-shaped tool surface — 12 tools.** Tools consolidate along intent and split along safety, so the host's `readOnlyHint`/`destructiveHint` annotations do the right thing. Four tools that merely duplicated host-native capabilities (`bash`, `text_editor.*`, `wait`) were removed once they failed that test. (ADR-0006, ADR-0013)
+- **A safety architecture adapted from Anthropic's design.** Single-session mutation lease, per-app approval via KDE notifications, app-category tiering (view-only / click-only / full), terminal-excluded screenshots, and a `Meta+Esc` global cancel grabbed at the compositor via KGlobalAccel. Every destructive tool routes through a central policy gate. (ADR-0007)
 
-- **Native to KDE/Wayland.** Uses KDE's first-party D-Bus APIs (`org.kde.KWin.EIS.RemoteDesktop` for input, `org.kde.KWin.ScreenShot2` for capture, `org.kde.KWin.Scripting` for window control). No Xvfb, no Docker, no portal dialogs.
-- **Accessibility-tree first.** Pixels are an explicit fallback. Most actions are deterministic AT-SPI invocations, not coordinate clicks. Inspired by the Playwright-MCP philosophy.
-- **Response-shaped behavior.** Tool responses carry the structured deltas that drive the agent's next decision; prompt-engineering instructions are minimised.
-- **Two-process model.** `kde-mcp --mode=live` controls your real desktop. `kde-mcp --mode=virtual` spawns a headless `kwin_wayland --virtual` session (optionally with `wayvnc` so you can watch over VNC) for isolated automation. No runtime swap, no single-process dual-context fragility.
-- **Safety architecture borrowed from Anthropic's design** (ADR-0007): single-session lock with KDE notifications, per-app approval per session via `org.freedesktop.Notifications`, app-category tiering (view-only browsers, click-only terminals/IDEs, full default), sentinel warnings for high-impact apps, terminal-excluded screenshots, `Meta+Esc` global cancel via KGlobalAccel. Three Anthropic features we explicitly cannot reproduce: server-side classifier, host-level app-hiding, bundled-with-host install — see comparison doc for substitutes.
+For the full side-by-side with Anthropic's macOS `computer-use`, see [`docs/comparison-with-anthropic-computer-use.md`](docs/comparison-with-anthropic-computer-use.md). A broader, honest comparison against other Linux desktop-control MCP projects is planned (see [`docs/research/prior-art.md`](docs/research/prior-art.md) for the current survey).
 
-## Why not just use Anthropic's `computer-use` / kwin-mcp?
+## Architecture
 
-Anthropic's `computer-use` is **macOS-only** (research preview, requires Pro/Max). On Linux you have:
+- **Three transports** in one binary: stdio, Streamable-HTTP, and a Unix domain socket.
+- **Singleton daemon.** The HTTP transport runs as a systemd-user service on `127.0.0.1:7575` with socket activation and idle-stop, so multiple agent sessions share one process (one tray icon, one AT-SPI subscription) instead of contending. The loopback bind is the trust boundary. (ADR-0011, ADR-0012, ADR-0015)
+- **Audited dispatch.** Every tool call writes one structured audit record; untrusted external strings are carried with an explicit `trust` tag so the agent can tell apart what it authored from what the screen returned. (ADR-0008)
 
-| Concern | Anthropic `computer-use` (macOS) | kwin-mcp | kde-mcp (this project) |
-|---|---|---|---|
-| Available on Linux | ❌ | ✅ | ✅ |
-| Compositor | macOS | Wayland (KDE) | Wayland (KDE) |
-| Input mechanism | macOS Accessibility API | libei via KDE EIS | libei via KDE EIS |
-| Primary surface | screenshots | mixed | a11y tree first; pixels fallback |
-| Response shape | screenshot after every action | mostly screenshots | structured diffs, screenshots opt-in |
-| Tool count (estimated) | ~5 | 30 | 15 |
-| Mode model | live only | live + virtual in one process | one mode per process |
-| Distribution | bundled with Claude Code CLI | Python package | single Rust binary (.mcpb planned) |
-| Per-app approval | terminal prompt | none | KDE notification with action buttons |
-| App-category tiering | yes | none | yes |
-| Global cancel shortcut | Esc (key consumed) | none | Meta+Esc (key consumed) |
-| Server-side injection classifier | yes | none | none (structural substitutes) |
-| Apps hidden during turn | yes | none | none (substitute: per-app approval + tier) |
-| Language | not public | Python | Rust |
+## Install
 
-For the full side-by-side comparison see `docs/comparison-with-anthropic-computer-use.md`. For the design rationale see `docs/specs/2026-05-13-kde-computer-use-mcp-design.md`.
+See [`packaging/README-install.md`](packaging/README-install.md) for dependencies (Arch / Fedora / Debian), the build, the systemd-user units, and the Claude Code / Claude Desktop MCP configuration. In short:
 
-## Quick orientation
+```sh
+cargo install --path .
+./packaging/install.sh        # installs the .desktop authorization + systemd-user units
+```
 
-- `CLAUDE.md` — operating instructions for AI assistants working in this repo (read first if you're a fresh Claude session)
-- `docs/HANDOFF.md` — current project state and the concrete next step (read second)
-- `docs/specs/` — the design specification (the load-bearing document)
-- `docs/research/` — collated research that informed the design (Anthropic spec deep-dive, Wayland/KDE primitive landscape, prior-art survey, LLM tool-design principles)
-- `docs/adr/` — Architecture Decision Records (7 of them): one file per non-obvious choice with the reasoning frozen at the moment it was made
-- `docs/comparison-with-anthropic-computer-use.md` — side-by-side analysis
-- `packaging/` — `.desktop` file for KWin ScreenShot2 D-Bus authorization, install notes, and `policy.toml.example` with sensible safety defaults
-- `src/` — Rust source (empty until implementation phase begins)
+Then point your MCP client at `http://127.0.0.1:7575/mcp`.
 
-## Hard scope limits
+## Repository layout
 
-- Not multi-compositor. KDE only. (GNOME/wlroots are tractable later but not in this design.)
-- Not multi-platform. Linux only.
-- Not a browser-automation tool — use Playwright-MCP for browsers.
-- Not a sandboxed-VM agent — use Cua for that.
-- Not headed for community use *yet*. Personal-use MVP first; community polish later if the tool proves useful.
+```
+src/                  Rust implementation (tools, transports, policy gate, AT-SPI / KWin / EIS plumbing)
+examples/             Standalone EIS probers — minimal POCs for the libei input path
+docs/specs/           The design specification (the load-bearing document)
+docs/adr/             Architecture Decision Records (0001–0015) — one decision per file
+docs/research/        Snapshot research that informed the design (Wayland/KDE primitives, prior art, LLM tool-design)
+docs/plans/           Historical implementation plans (planning artifacts; the code is the source of truth)
+docs/runbook/         A machine-executable verification protocol and product scenarios
+tools/                Latency analyzer for the per-phase tool-call profiling
+packaging/            .desktop authorization, systemd-user units, policy.toml example
+```
 
-## Status of the work
+## Development
 
-This repository currently contains design artifacts only. **Implementation has not started.** The brainstorming workflow that produced this design ends here; the next step is invoking the `superpowers:writing-plans` skill to turn the spec into a sequenced implementation plan (see `docs/HANDOFF.md`).
+Contributors and AI coding agents: read [`CONTRIBUTING.md`](CONTRIBUTING.md) and [`AGENTS.md`](AGENTS.md) before opening a PR. The short version: Conventional Commits, `cargo fmt` + `cargo clippy --workspace --all-targets -- -D warnings` + `cargo test --workspace` must be clean before every commit, no `unwrap()`/`expect()` on user-reachable paths, and one ADR per non-obvious decision.
 
-To continue work in a fresh session, open this repo and read `CLAUDE.md` and `docs/HANDOFF.md` first.
+## License
+
+MIT — see [`LICENSE`](LICENSE).

@@ -14,6 +14,6 @@ Matching priority: top-to-bottom; first match wins.
 | F6 | `external_command_failed.*magick` OR `magick: command not found` | (none) | no | ImageMagick missing. Cannot generate S3 fixture. Skip S3. |
 | F7 | `kde-mcp .* (connection refused|broken pipe|server crashed)` | (none) | no | MCP server died. **Abort the run.** Tell the user to restart their Claude Code session. |
 | F8 | `app_approval_required` AND `still_pending: true` | (wait 30 s, then no fix — assume user clicked) | yes | Policy-gate prompt is in flight. The executing agent should sleep 30 s for the user to click Allow, then retry exactly once. If still pending, log and move on. |
-| F9 | `cargo test` returns non-zero from L1.2 with `expected 16 wire tool names` | (none) | no | Runbook is **outdated** vs the binary's tool set. Abort the run and tell the user the runbook needs updating. |
+| F9 | `cargo test` returns non-zero from L1.2 with `expected 12 wire tool names` | (none) | no | Runbook is **outdated** vs the binary's tool set. Abort the run and tell the user the runbook needs updating. |
 
 **Anything not matching:** log the full failure response to `runs/<id>/<step-id>-failure.md`, mark the step `failed`, continue to the next independent step. The dependent steps will record `skipped(reason: dep <step-id> failed)`.

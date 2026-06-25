@@ -24,7 +24,7 @@ pub const LATEST: Self = Self::V_2025_11_25;
 
 ## 0.2 — `#[tool_router]` composition across `impl` blocks
 
-**Test:** spun up a throwaway crate `/tmp/rmcp-toolrouter-spike/` with two `#[tool_router] impl Foo { ... }` blocks on the same type, one `#[tool]`-annotated method in each. Ran `cargo check`.
+**Test:** spun up a throwaway crate with two `#[tool_router] impl Foo { ... }` blocks on the same type, one `#[tool]`-annotated method in each. Ran `cargo check`.
 
 **Result — failure (expected per the rmcp design):**
 
@@ -102,7 +102,7 @@ All return `()`. Coordinates are `f32` logical pixels. Frame's `timestamp` is mi
 
 ## 0.5 — KWin `org.kde.KWin.EIS.RemoteDesktop` D-Bus signature
 
-**Source:** live `busctl --user introspect` against the dev machine's KDE Plasma 6 Wayland session (kwin_wayland process PID 1827, bus name `org.kde.KWin`).
+**Source:** live `busctl --user introspect` against the dev machine's KDE Plasma 6 Wayland session (bus name `org.kde.KWin`).
 
 The interface is exposed at the **child object path** `/org/kde/KWin/EIS/RemoteDesktop` (not at `/org/kde/KWin/EIS` — that path has only Introspectable/Peer/Properties). Tree under `/org/kde/KWin/EIS`:
 
@@ -164,7 +164,7 @@ These adjustments are applied in-flight during Tasks 1 and 11; the plan file is 
 
 ## Postscript — live EIS keystroke prober run (2026-05-14)
 
-During the Phase 0 end-of-task POC pass the user asked: "test API calls so we understand the future job is doable." After verifying the MCP wire end-to-end (initialise → tools/list → tools/call against the live binary, all 16 tool names + schemas + hints round-tripping correctly), the user further asked to verify the libei keystroke path — the riskiest unverified primitive across all remaining phases.
+During the Phase 0 end-of-task POC pass we tested the API calls end-to-end to confirm the future job is doable. After verifying the MCP wire end-to-end (initialise → tools/list → tools/call against the live binary, all 16 tool names + schemas + hints round-tripping correctly), we verified the libei keystroke path — the riskiest unverified primitive across all remaining phases.
 
 A standalone prober crate was written at `examples/eis-keystroke-prober/` (committed to the repo as a permanent reference; not a workspace member of kde-mcp). It exercises the exact code path Phase 2's `keyboard.key` will use: zbus → `connectToEIS` → FD → `ei::Context::new` → `handshake_tokio(Sender)` → bind capabilities → wait for `DeviceAdded` + `DeviceResumed` → `start_emulating` → `Keyboard::key` + `Device::frame` → `stop_emulating`.
 

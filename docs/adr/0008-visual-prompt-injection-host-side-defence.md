@@ -55,4 +55,4 @@ Server-side, we ratify the existing scope and document the limit explicitly:
 
 ## Source
 
-Articulated 2026-05-14 after research conducted by the parallel-agents pass that preceded the implementation plan. Primary citation: VPI-Bench (2025), surfaced via `docs/research/2026-05-13-mcp-ecosystem-trends.md` Bucket 2. The user (atassis) approved framing this as a new ADR rather than a revision to §4.7, on the grounds that ADRs are for non-obvious decisions someone might reasonably revisit — and "should the server defend against pixel injection?" is exactly that kind of question.
+Recorded 2026-05-14 during the research that preceded the implementation plan. Primary citation: VPI-Bench (2025), surfaced via `docs/research/2026-05-13-mcp-ecosystem-trends.md` Bucket 2. Framed as a new ADR rather than a revision to §4.7, on the grounds that ADRs are for non-obvious decisions someone might reasonably revisit — and "should the server defend against pixel injection?" is exactly that kind of question.

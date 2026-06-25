@@ -1,6 +1,6 @@
 # kde-mcp Phase 2 — Input Tools Against Live Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use `superpowers:subagent-driven-development` (recommended) or `superpowers:executing-plans` to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> Historical planning artifact — captures the plan as written on the date in the filename; the shipped implementation is the source of truth (see the ADRs and the design spec).
 
 **Goal:** Replace the five mutating-tool stubs that are unblocked at Phase 2 — `mouse`, `keyboard.type`, `keyboard.key`, `clipboard_write`, `act_on_element` — with working implementations against the user's real KDE Plasma 6 / Wayland session. After Phase 2 the spec's §14 "open kcalc, type 2+3, press =, read the result" demo is technically possible.
 
@@ -1705,14 +1705,14 @@ truncate -s 0 ~/.local/state/kde-mcp/audit.jsonl
 tail -1 ~/.local/state/kde-mcp/audit.jsonl | python3 -c "import sys,json; r=json.loads(sys.stdin.read()); print(r['tool'], r['ok'], r.get('duration_ms'))"
 ```
 
-- [ ] **Step 8.4: Update `docs/HANDOFF.md`**
+- [ ] **Step 8.4: Update the README status**
 
 Mark Phase 2 complete, pivot the "What is NOT yet done" section to Phase 3 (policy gate). Update test count, last commit, tag.
 
 - [ ] **Step 8.5: Commit + tag**
 
 ```bash
-git add docs/HANDOFF.md tests/integration/SMOKE.md
+git add README.md tests/integration/SMOKE.md
 git commit -m "docs(phase-2): mark complete; pivot to Phase 3 policy gate"
 git tag phase-2
 ```
@@ -1735,15 +1735,9 @@ git tag phase-2
 
 ---
 
-## Execution handoff
+## Recommended sequence
 
-Plan complete and saved to `docs/plans/2026-05-14-phase-2-input-tools.md`. Two execution options:
-
-**1. Subagent-Driven (recommended)** — fresh subagent per task, review between tasks.
-
-**2. Inline Execution** — execute in this session via `superpowers:executing-plans`, batch with checkpoints.
-
-User has been autonomous-mode all session. Recommended sequence in continuation:
+Recommended sequence:
 
 - T0 spike (45 min, read-only investigations)
 - T1 Cargo deps
