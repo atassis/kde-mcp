@@ -20,7 +20,7 @@ path = "src/main.rs"
 # Phase 0 deps only. Each subsequent phase adds the dependencies it actually
 # uses (atspi, reis, xkbcommon, image, tesseract, ...).
 [dependencies]
-rmcp           = { version = "1.7", features = ["server", "macros", "transport-io", "transport-streamable-http-server"] }
+rmcp           = { version = "2.1", features = ["server", "macros", "transport-io", "transport-streamable-http-server"] }
 tokio          = { version = "1.40", features = ["rt-multi-thread", "macros", "signal", "time", "sync", "io-std", "fs", "process"] }
 zbus           = { version = "5.15", default-features = false, features = ["tokio"] }
 zvariant       = "5.7"
