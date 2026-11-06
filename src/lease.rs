@@ -179,7 +179,7 @@ impl LeaseStore {
             Ok(r) => r,
             Err(_) => return Ok(false),
         };
-        if rec.holder_pid != self.self_pid {
+        if rec.holder_pid != self.self_pid || rec.expires_at <= Utc::now() {
             return Ok(false);
         }
         let now = Utc::now();
@@ -191,6 +191,44 @@ impl LeaseStore {
         guard.write_all(&serialised)?;
         guard.flush()?;
         Ok(true)
+    }
+
+    /// Keep an in-flight mutation alive without a detached heartbeat task.
+    /// Dropping the tool future drops this loop and its interval as well.
+    pub(crate) async fn run_mutation<F, T>(&self, future: F) -> Result<T, crate::error::ToolError>
+    where
+        F: std::future::Future<Output = Result<T, crate::error::ToolError>>,
+    {
+        let period = (self.config.idle_timeout / 3).max(Duration::from_millis(1));
+        let mut tick = tokio::time::interval(period);
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        tokio::pin!(future);
+        loop {
+            tokio::select! {
+                biased;
+                _ = tick.tick() => {
+                    self.require_and_refresh()?;
+                }
+                outcome = &mut future => {
+                    self.require_and_refresh()?;
+                    return outcome;
+                }
+            }
+        }
+    }
+
+    fn require_and_refresh(&self) -> Result<(), crate::error::ToolError> {
+        match self.refresh_if_holder() {
+            Ok(true) => Ok(()),
+            Ok(false) => Err(crate::error::ToolError::PermissionDenied {
+                reason: "mutation lease expired or ownership was lost while the call was pending"
+                    .into(),
+            }),
+            Err(error) => Err(crate::error::ToolError::Io {
+                path: lease_path().to_string_lossy().into_owned(),
+                error: error.to_string(),
+            }),
+        }
     }
 
     /// Release the lease iff we hold it. Removes the file.

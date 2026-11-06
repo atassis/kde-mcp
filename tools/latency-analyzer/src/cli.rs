@@ -88,12 +88,13 @@ pub fn describe_ms(ms: u64) -> String {
 
 /// Read the audit log at `path`, keep records at or after `now_ms - since_ms`
 /// (records with an unparseable timestamp are always kept), aggregate, and
-/// render the report. `now_ms` and `ending_label` are injected for testability.
+/// render the report. The end date comes from the latest valid included
+/// timestamp; `fallback_ending_label` is used only when none is valid.
 pub fn report_for(
     path: &Path,
     since_ms: Option<u64>,
     now_ms: i64,
-    ending_label: &str,
+    fallback_ending_label: &str,
 ) -> io::Result<String> {
     let records = parse_jsonl(path)?;
     let kept: Vec<_> = match since_ms {
@@ -109,6 +110,16 @@ pub fn report_for(
                 .collect()
         }
     };
+    let ending_label = kept
+        .iter()
+        .filter_map(|record| chrono::DateTime::parse_from_rfc3339(&record.ts).ok())
+        .max()
+        .map(|ts| {
+            ts.with_timezone(&chrono::Utc)
+                .format("%Y-%m-%d")
+                .to_string()
+        })
+        .unwrap_or_else(|| fallback_ending_label.to_string());
     let stats = aggregate(&kept);
     let since_label = match since_ms {
         None => "all time".to_string(),
@@ -118,7 +129,7 @@ pub fn report_for(
         &stats,
         &RenderOptions {
             since_label,
-            ending_label: ending_label.to_string(),
+            ending_label,
         },
     ))
 }
@@ -131,7 +142,7 @@ mod tests {
     const MIN_MS: i64 = 60 * 1000;
     const TIMINGS: &str = r#""timings":{"t_received_ns":0,"t_policy_done_ns":1000000,"t_impl_start_ns":1100000,"t_impl_done_ns":50000000,"t_audit_written_ns":50500000}"#;
 
-    fn write_temp(name: &str, rows: &[(&str, i64)]) -> PathBuf {
+    fn write_temp(rows: &[(&str, i64)]) -> tempfile::NamedTempFile {
         use chrono::{TimeZone, Utc};
         let mut s = String::new();
         for (tool, ts_ms) in rows {
@@ -140,9 +151,11 @@ mod tests {
                 "{{\"tool\":\"{tool}\",\"ts\":\"{ts}\",{TIMINGS}}}\n"
             ));
         }
-        let path = std::env::temp_dir().join(format!("kdemcp-latency-test-{name}.jsonl"));
-        std::fs::write(&path, s).unwrap();
-        path
+        use std::io::Write;
+        let mut log = tempfile::NamedTempFile::new().unwrap();
+        log.write_all(s.as_bytes()).unwrap();
+        log.flush().unwrap();
+        log
     }
 
     #[test]
@@ -175,36 +188,77 @@ mod tests {
     #[test]
     fn report_for_since_all_keeps_every_record() {
         let now = 1_700_000_000_000i64;
-        let path = write_temp(
-            "all",
-            &[
-                ("ancient_tool", now - 30 * DAY_MS),
-                ("recent_tool", now - 10 * MIN_MS),
-                ("recent_tool", now - 5 * MIN_MS),
-            ],
-        );
-        let out = report_for(&path, None, now, "2026-01-01").unwrap();
+        let log = write_temp(&[
+            ("ancient_tool", now - 30 * DAY_MS),
+            ("recent_tool", now - 10 * MIN_MS),
+            ("recent_tool", now - 5 * MIN_MS),
+        ]);
+        let out = report_for(log.path(), None, now, "2026-01-01").unwrap();
         assert!(out.contains("N = 3 tool calls"));
         assert!(out.contains("ancient_tool"));
         assert!(out.contains("recent_tool"));
-        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
     fn report_for_since_1h_filters_out_old_records() {
         let now = 1_700_000_000_000i64;
-        let path = write_temp(
-            "1h",
-            &[
-                ("ancient_tool", now - 30 * DAY_MS),
-                ("recent_tool", now - 10 * MIN_MS),
-                ("recent_tool", now - 5 * MIN_MS),
-            ],
-        );
-        let out = report_for(&path, Some(60 * 60 * 1000), now, "2026-01-01").unwrap();
+        let log = write_temp(&[
+            ("ancient_tool", now - 30 * DAY_MS),
+            ("recent_tool", now - 10 * MIN_MS),
+            ("recent_tool", now - 5 * MIN_MS),
+        ]);
+        let out = report_for(log.path(), Some(60 * 60 * 1000), now, "2026-01-01").unwrap();
         assert!(out.contains("N = 2 tool calls"));
         assert!(out.contains("recent_tool"));
         assert!(!out.contains("ancient_tool"));
-        let _ = std::fs::remove_file(&path);
+    }
+    #[test]
+    fn report_date_uses_utc_and_filters_old_records() {
+        let mut log = tempfile::NamedTempFile::new().unwrap();
+        use std::io::Write;
+        writeln!(
+            log,
+            r#"{{"tool":"old","ts":"2020-01-01T00:00:00Z",{TIMINGS}}}"#
+        )
+        .unwrap();
+        writeln!(
+            log,
+            r#"{{"tool":"recent","ts":"2025-01-01T00:30:00+02:00",{TIMINGS}}}"#
+        )
+        .unwrap();
+        let now = chrono::DateTime::parse_from_rfc3339("2024-12-31T23:00:00Z")
+            .unwrap()
+            .timestamp_millis();
+        let report = report_for(log.path(), Some(60 * 60 * 1000), now, "2026-01-01").unwrap();
+        assert!(report.contains("ending 2024-12-31"));
+        assert!(!report.contains("| old"));
+    }
+
+    #[test]
+    fn empty_or_invalid_timestamp_input_uses_supplied_fallback_date() {
+        let mut log = tempfile::NamedTempFile::new().unwrap();
+        assert!(report_for(log.path(), None, 0, "2026-01-01")
+            .unwrap()
+            .contains("ending 2026-01-01"));
+        use std::io::Write;
+        writeln!(log, r#"{{"tool":"observe","ts":"invalid",{TIMINGS}}}"#).unwrap();
+        assert!(report_for(log.path(), None, 0, "2026-01-01")
+            .unwrap()
+            .contains("ending 2026-01-01"));
+    }
+
+    #[test]
+    fn excluded_valid_timestamps_do_not_override_fallback_date() {
+        let mut log = tempfile::NamedTempFile::new().unwrap();
+        use std::io::Write;
+        writeln!(
+            log,
+            r#"{{"tool":"old","ts":"2020-01-01T00:00:00Z",{TIMINGS}}}"#
+        )
+        .unwrap();
+        writeln!(log, r#"{{"tool":"observe","ts":"invalid",{TIMINGS}}}"#).unwrap();
+        let report = report_for(log.path(), Some(1), 1_700_000_000_000, "2026-01-01").unwrap();
+        assert!(report.contains("ending 2026-01-01"));
+        assert!(report.contains("N = 1 tool calls"));
     }
 }

@@ -19,49 +19,82 @@ use crate::policy::TargetApp;
 use crate::server::KdeMcp;
 use std::time::Duration;
 
-/// Returns the resource class of the currently-focused window, or `None`
-/// if no window is focused.
+/// Capture identity as well as class: approving one Kate window must not
+/// silently authorize input to another Kate window after a long user wait.
+#[derive(Debug, PartialEq, Eq, serde::Deserialize)]
+pub(crate) struct TargetSnapshot {
+    pub class: Option<String>,
+    uuid: Option<String>,
+    geometry: Option<[i32; 4]>,
+    cursor: Option<[i32; 2]>,
+}
+
+impl TargetSnapshot {
+    pub fn ensure_unchanged(&self, current: &Self) -> Result<(), ToolError> {
+        if self != current {
+            return Err(ToolError::PermissionDenied {
+                reason: "input target changed while awaiting approval; observe and retry".into(),
+            });
+        }
+        Ok(())
+    }
+}
+
+async fn snapshot(state: &KdeMcp, body: &str) -> Result<TargetSnapshot, ToolError> {
+    let payload = run_script(&state.bus, body, Duration::from_secs(2)).await?;
+    serde_json::from_str(&payload).map_err(|e| ToolError::ExternalCommandFailed {
+        stderr: format!("target snapshot JSON parse: {e}"),
+    })
+}
+
+pub(crate) async fn focused_target(state: &KdeMcp) -> Result<TargetSnapshot, ToolError> {
+    snapshot(state, &target_script("ws.activeWindow", false)).await
+}
+
 pub async fn focused_class(state: &KdeMcp) -> Result<Option<String>, ToolError> {
-    let payload = run_script(&state.bus, JS_ACTIVE_CLASS, Duration::from_secs(2)).await?;
-    let v: serde_json::Value =
-        serde_json::from_str(&payload).map_err(|e| ToolError::ExternalCommandFailed {
-            stderr: format!("focused_class JSON parse: {e}"),
-        })?;
-    Ok(v.get("class")
-        .and_then(|c| c.as_str())
-        .filter(|s| !s.is_empty())
-        .map(|s| s.to_string()))
+    Ok(focused_target(state).await?.class)
 }
 
-/// Returns the resource class of the window at logical-pixel coordinate
-/// `(x, y)`. Falls back to `None` if no window is at that point.
-pub async fn class_at_coord(state: &KdeMcp, x: i32, y: i32) -> Result<Option<String>, ToolError> {
-    let body = class_at_coord_script(x, y);
-    let payload = run_script(&state.bus, &body, Duration::from_secs(2)).await?;
-    let v: serde_json::Value =
-        serde_json::from_str(&payload).map_err(|e| ToolError::ExternalCommandFailed {
-            stderr: format!("class_at_coord JSON parse: {e}"),
-        })?;
-    Ok(v.get("class")
-        .and_then(|c| c.as_str())
-        .filter(|s| !s.is_empty())
-        .map(|s| s.to_string()))
+pub(crate) async fn target_at_coord(
+    state: &KdeMcp,
+    x: i32,
+    y: i32,
+) -> Result<TargetSnapshot, ToolError> {
+    snapshot(state, &class_at_coord_script(x, y)).await
 }
 
-/// Build the KWin JS body for `class_at_coord`. Extracted for unit tests.
-///
-/// KWin Plasma 6's QJSEngine does not expose `Qt` as a global, so the
-/// previous `Qt.point(x, y)` form raised `ReferenceError: Qt is not
-/// defined`. The object literal `{x, y}` is auto-coerced to `QPoint`
-/// when passed to `workspace.windowAt(QPoint, int)`.
-fn class_at_coord_script(x: i32, y: i32) -> String {
+pub(crate) async fn pointer_target(state: &KdeMcp) -> Result<TargetSnapshot, ToolError> {
+    snapshot(
+        state,
+        &target_script("(ws.windowAt ? ws.windowAt(ws.cursorPos, 1) : [])[0]", true),
+    )
+    .await
+}
+
+fn target_script(pick: &str, include_cursor: bool) -> String {
+    let cursor = if include_cursor {
+        "[ws.cursorPos.x, ws.cursorPos.y]"
+    } else {
+        "null"
+    };
     format!(
         r#"
         var ws = workspace;
-        var w = ws.windowAt ? ws.windowAt({{x: {x}, y: {y}}}, 1) : null;
-        var pick = (w && w.length > 0) ? w[0] : null;
-        return {{ class: pick ? pick.resourceClass : "" }};
-        "#
+        var pick = {pick};
+        var g = pick ? pick.frameGeometry : null;
+        return {{ class: pick ? pick.resourceClass : null,
+                  uuid: pick && pick.internalId ? pick.internalId.toString() : null,
+                  geometry: g ? [g.x, g.y, g.width, g.height] : null,
+                  cursor: {cursor} }};
+    "#
+    )
+}
+
+/// KWin's QJSEngine has no Qt global; a point literal is coerced to QPoint.
+fn class_at_coord_script(x: i32, y: i32) -> String {
+    target_script(
+        &format!("(ws.windowAt ? ws.windowAt({{x: {x}, y: {y}}}, 1) : [])[0]"),
+        false,
     )
 }
 
@@ -128,20 +161,45 @@ pub async fn class_for_window_uuid(
 /// regardless.
 pub fn to_target(class: Option<String>) -> TargetApp {
     match class {
-        Some(c) => TargetApp::Class(c),
-        None => TargetApp::Classless,
+        Some(c) if !c.is_empty() => TargetApp::Class(c),
+        _ => TargetApp::Classless,
     }
 }
-
-const JS_ACTIVE_CLASS: &str = r#"
-    var ws = workspace;
-    var w = ws.activeWindow;
-    return { class: w ? w.resourceClass : "" };
-"#;
 
 #[cfg(test)]
 mod tests {
     use super::class_at_coord_script;
+
+    #[test]
+    fn changed_window_of_same_app_is_rejected() {
+        let before: super::TargetSnapshot = serde_json::from_value(serde_json::json!({
+            "class": "kate", "uuid": "window-a", "geometry": [0, 0, 800, 600]
+        }))
+        .unwrap();
+        let after: super::TargetSnapshot = serde_json::from_value(serde_json::json!({
+            "class": "kate", "uuid": "window-b", "geometry": [0, 0, 800, 600]
+        }))
+        .unwrap();
+        assert!(before.ensure_unchanged(&after).is_err());
+        assert!(before.ensure_unchanged(&before).is_ok());
+    }
+
+    #[test]
+    fn moved_window_or_pointer_is_rejected() {
+        let before: super::TargetSnapshot = serde_json::from_value(serde_json::json!({
+            "class": "kate", "uuid": "window-a", "geometry": [0, 0, 800, 600], "cursor": [100, 100]
+        }))
+        .unwrap();
+        let moved: super::TargetSnapshot = serde_json::from_value(serde_json::json!({
+            "class": "kate", "uuid": "window-a", "geometry": [100, 0, 800, 600], "cursor": [100, 100]
+        })).unwrap();
+        let pointer: super::TargetSnapshot = serde_json::from_value(serde_json::json!({
+            "class": "kate", "uuid": "window-a", "geometry": [0, 0, 800, 600], "cursor": [200, 100]
+        }))
+        .unwrap();
+        assert!(before.ensure_unchanged(&moved).is_err());
+        assert!(before.ensure_unchanged(&pointer).is_err());
+    }
 
     /// Regression guard: KWin Plasma 6's QJSEngine has no `Qt` global, so
     /// the script must not reference it. See the function-level doc-comment

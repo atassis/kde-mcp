@@ -458,6 +458,122 @@ impl ServerHandler for KdeMcp {
     }
 }
 
+/// Shared phase-timing state for both dispatchers.
+///
+/// Two dispatchers (`dispatch_audited`, `dispatch_audited_with_content`)
+/// follow the same five-phase lifecycle — they only differ in the
+/// `CallToolResult` payload shape (typed-serialise vs `Vec<Content>`).
+/// `TimingState` captures the lifecycle so the two payload paths can
+/// share one copy of the boundary captures.
+struct TimingState {
+    request_start: std::time::Instant,
+    t_received_ns: u64,
+    t_policy_done_ns: u64,
+    t_impl_start_ns: u64,
+    t_impl_done_ns: u64,
+}
+
+impl TimingState {
+    fn start() -> Self {
+        Self {
+            request_start: std::time::Instant::now(),
+            t_received_ns: 0,
+            t_policy_done_ns: 0,
+            t_impl_start_ns: 0,
+            t_impl_done_ns: 0,
+        }
+    }
+
+    /// Capture the policy-done / impl-start boundary (they collapse onto
+    /// the same instant — no work happens between them in either path).
+    fn mark_policy_impl_boundary(&mut self) {
+        let ns = self.request_start.elapsed().as_nanos() as u64;
+        self.t_policy_done_ns = ns;
+        self.t_impl_start_ns = ns;
+    }
+
+    /// Capture impl-done immediately after the tool future returns.
+    fn mark_impl_done(&mut self) {
+        self.t_impl_done_ns = self.request_start.elapsed().as_nanos() as u64;
+    }
+
+    /// Finalize into an `AuditTimings`. Captures `t_audit_written_ns`
+    /// just before this returns — caller must call this immediately
+    /// before `audit.write(rec).await` so the timing field reflects
+    /// the boundary the spec §3.1 intends.
+    ///
+    /// Spec §3.1 calls for "after flush", but the flush IS the
+    /// measured operation — an exact-after capture would require a
+    /// double-write. The within-record delta is < 1 µs typically; we
+    /// accept that imprecision in exchange for a single-write audit path.
+    fn finish(self) -> crate::audit::AuditTimings {
+        let t_audit_written_ns = self.request_start.elapsed().as_nanos() as u64;
+        crate::audit::AuditTimings {
+            t_received_ns: self.t_received_ns,
+            t_policy_done_ns: self.t_policy_done_ns,
+            t_impl_start_ns: self.t_impl_start_ns,
+            t_impl_done_ns: self.t_impl_done_ns,
+            t_audit_written_ns,
+        }
+    }
+
+    /// Lease-refused early-return: policy/impl collapse onto the
+    /// instant of refusal, impl-done equals impl-start.
+    fn collapse_for_lease_refused(&mut self) {
+        let ns = self.request_start.elapsed().as_nanos() as u64;
+        self.t_policy_done_ns = ns;
+        self.t_impl_start_ns = ns;
+        self.t_impl_done_ns = ns;
+    }
+}
+
+/// Translate a `ToolError` into the JSON `error` payload both
+/// dispatchers store in `AuditRecord.error` and surface in the
+/// `CallToolResult` content. Shape is `{ "code": <slug>, "details": <serialized err> }`,
+/// matching the inline construction this helper replaces.
+fn build_error_payload(err: &ToolError) -> serde_json::Value {
+    let code = err.code();
+    let details = serde_json::to_value(err).unwrap_or(serde_json::Value::Null);
+    serde_json::json!({ "code": code, "details": details })
+}
+
+/// Construct an `AuditRecord` and flush it through the log, logging
+/// any flush failure. Centralises the four post-dispatch writes the
+/// two dispatchers used to inline. `ts` is left empty here — the
+/// audit layer populates it on write.
+#[allow(clippy::too_many_arguments)]
+async fn write_audit_record(
+    audit: &Arc<AuditLog>,
+    mode: &str,
+    tool: &str,
+    args: serde_json::Value,
+    ok: bool,
+    duration_ms: Option<u64>,
+    error: Option<serde_json::Value>,
+    session_id: Option<String>,
+    timings: Option<crate::audit::AuditTimings>,
+) {
+    let rec = crate::audit::AuditRecord {
+        ts: String::new(),
+        mode: mode.to_string(),
+        tool: tool.to_string(),
+        args,
+        ok,
+        duration_ms,
+        error,
+        vision_fallback: None,
+        session_id,
+        // Spec §4.13 row 10: env-driven harness tag. Cheap to read on
+        // every dispatch (a getenv syscall on Linux); if it later shows
+        // up in latency profiles we can cache it at daemon startup.
+        session_tag: crate::audit::read_session_tag(),
+        timings,
+    };
+    if let Err(e) = audit.write(rec).await {
+        tracing::error!(error = %e, tool, "audit write failed");
+    }
+}
+
 /// Wrap a tool future with audit-log dispatch.
 ///
 /// - Serialises args to JSON, runs the redactor, writes the AuditRecord.
@@ -483,54 +599,34 @@ where
 {
     // Five-phase nanosecond budget per spec §3.1
     // (docs/specs/2026-05-19-evaluation-and-latency-design.md). All deltas
-    // are relative to `request_start`, so t_received_ns is always 0.
-    let request_start = std::time::Instant::now();
-    let t_received_ns: u64 = 0;
+    // are relative to `ts.request_start`, so t_received_ns is always 0.
+    let mut ts = TimingState::start();
     let lease_held = match tool_kind {
         crate::lease::ToolKind::Mutate => match lease.acquire(tool).await {
             Ok(()) => true,
             Err(e) => {
                 let err: ToolError = e.into();
-                let code = err.code();
                 let msg = err.to_string();
-                let details = serde_json::to_value(&err).unwrap_or(serde_json::Value::Null);
-                let payload = serde_json::json!({ "code": code, "details": details });
+                let payload = build_error_payload(&err);
                 let r = CallToolResult::error(vec![
                     Content::text(msg),
                     Content::text(payload.to_string()),
                 ]);
                 // Lease-refused path: the "policy"/"impl" boundaries collapse
                 // onto the same instant since we never entered the tool body.
-                let t_policy_done_ns = request_start.elapsed().as_nanos() as u64;
-                let t_impl_start_ns = t_policy_done_ns;
-                let t_impl_done_ns = t_policy_done_ns;
-                let mut timings = crate::audit::AuditTimings {
-                    t_received_ns,
-                    t_policy_done_ns,
-                    t_impl_start_ns,
-                    t_impl_done_ns,
-                    t_audit_written_ns: 0,
-                };
-                // Captured just before audit.write; spec §3.1 says "after
-                // flush" but the flush is the measured operation, so an
-                // exact-after capture would require a double-write. The
-                // delta within a single record is < 1 µs typically.
-                timings.t_audit_written_ns = request_start.elapsed().as_nanos() as u64;
-                let rec = crate::audit::AuditRecord {
-                    ts: String::new(),
-                    mode: mode.to_string(),
-                    tool: tool.to_string(),
-                    args: crate::audit::redact(tool, args),
-                    ok: false,
-                    duration_ms: Some(0),
-                    error: Some(payload),
-                    vision_fallback: None,
-                    session_id: session_id.clone(),
-                    timings: Some(timings),
-                };
-                if let Err(e) = audit.write(rec).await {
-                    tracing::error!(error = %e, tool, "audit write failed");
-                }
+                ts.collapse_for_lease_refused();
+                write_audit_record(
+                    &audit,
+                    mode,
+                    tool,
+                    crate::audit::redact(tool, args),
+                    false,
+                    Some(0),
+                    Some(payload),
+                    session_id.clone(),
+                    Some(ts.finish()),
+                )
+                .await;
                 return r;
             }
         },
@@ -542,14 +638,15 @@ where
     };
     let _guard = crate::tray::TrayGuard::enter(&tray, tool);
     // Policy + lease + tray-guard setup done; about to enter the tool body.
-    // Single capture for both fields — same semantic boundary, no work between.
-    let policy_impl_boundary_ns = request_start.elapsed().as_nanos() as u64;
-    let t_policy_done_ns = policy_impl_boundary_ns;
-    let t_impl_start_ns = policy_impl_boundary_ns;
+    ts.mark_policy_impl_boundary();
     let started = std::time::Instant::now();
-    let outcome = fut.await;
+    let outcome = if lease_held {
+        lease.run_mutation(fut).await
+    } else {
+        fut.await
+    };
     let duration_ms = started.elapsed().as_millis() as u64;
-    let t_impl_done_ns = request_start.elapsed().as_nanos() as u64;
+    ts.mark_impl_done();
 
     // On cancel, release immediately so the next session can take over.
     if lease_held
@@ -568,41 +665,26 @@ where
             )
         }
         Err(e) => {
-            let code = e.code();
             let msg = e.to_string();
-            let details = serde_json::to_value(&e).unwrap_or(serde_json::Value::Null);
-            let payload = serde_json::json!({ "code": code, "details": details });
+            let payload = build_error_payload(&e);
             let r =
                 CallToolResult::error(vec![Content::text(msg), Content::text(payload.to_string())]);
             (r, Some(payload))
         }
     };
-    // Captured just before audit.write; spec §3.1 says "after flush" but the
-    // flush is the measured operation, so an exact-after capture would require
-    // a double-write. The delta within a single record is < 1 µs typically.
-    let t_audit_written_ns = request_start.elapsed().as_nanos() as u64;
-    let timings = crate::audit::AuditTimings {
-        t_received_ns,
-        t_policy_done_ns,
-        t_impl_start_ns,
-        t_impl_done_ns,
-        t_audit_written_ns,
-    };
-    let rec = crate::audit::AuditRecord {
-        ts: String::new(),
-        mode: mode.to_string(),
-        tool: tool.to_string(),
-        args: redacted_args,
-        ok: audit_error.is_none(),
-        duration_ms: Some(duration_ms),
-        error: audit_error,
-        vision_fallback: None,
+    let ok = audit_error.is_none();
+    write_audit_record(
+        &audit,
+        mode,
+        tool,
+        redacted_args,
+        ok,
+        Some(duration_ms),
+        audit_error,
         session_id,
-        timings: Some(timings),
-    };
-    if let Err(e) = audit.write(rec).await {
-        tracing::error!(error = %e, tool, "audit write failed");
-    }
+        Some(ts.finish()),
+    )
+    .await;
     call_result
 }
 
@@ -629,53 +711,35 @@ pub(crate) async fn dispatch_audited_with_content<F>(
 where
     F: std::future::Future<Output = Result<Vec<Content>, ToolError>>,
 {
-    // Mirror dispatch_audited's five-phase budget. Kept in sync deliberately
-    // (see the doc comment above this function).
-    let request_start = std::time::Instant::now();
-    let t_received_ns: u64 = 0;
+    // Mirror dispatch_audited's five-phase budget via the shared
+    // `TimingState` helper (see the doc comment above this function).
+    let mut ts = TimingState::start();
     let lease_held = match tool_kind {
         crate::lease::ToolKind::Mutate => match lease.acquire(tool).await {
             Ok(()) => true,
             Err(e) => {
                 let err: ToolError = e.into();
-                let code = err.code();
                 let msg = err.to_string();
-                let details = serde_json::to_value(&err).unwrap_or(serde_json::Value::Null);
-                let payload = serde_json::json!({ "code": code, "details": details });
+                let payload = build_error_payload(&err);
                 let r = CallToolResult::error(vec![
                     Content::text(msg),
                     Content::text(payload.to_string()),
                 ]);
                 // Lease-refused: policy/impl boundaries collapse onto the
                 // same instant; we never entered the tool body.
-                let t_policy_done_ns = request_start.elapsed().as_nanos() as u64;
-                let t_impl_start_ns = t_policy_done_ns;
-                let t_impl_done_ns = t_policy_done_ns;
-                let mut timings = crate::audit::AuditTimings {
-                    t_received_ns,
-                    t_policy_done_ns,
-                    t_impl_start_ns,
-                    t_impl_done_ns,
-                    t_audit_written_ns: 0,
-                };
-                // Captured just before audit.write; see dispatch_audited
-                // for the "after flush" vs "before flush" trade-off note.
-                timings.t_audit_written_ns = request_start.elapsed().as_nanos() as u64;
-                let rec = crate::audit::AuditRecord {
-                    ts: String::new(),
-                    mode: mode.to_string(),
-                    tool: tool.to_string(),
-                    args: crate::audit::redact(tool, args),
-                    ok: false,
-                    duration_ms: Some(0),
-                    error: Some(payload),
-                    vision_fallback: None,
-                    session_id: session_id.clone(),
-                    timings: Some(timings),
-                };
-                if let Err(e) = audit.write(rec).await {
-                    tracing::error!(error = %e, tool, "audit write failed");
-                }
+                ts.collapse_for_lease_refused();
+                write_audit_record(
+                    &audit,
+                    mode,
+                    tool,
+                    crate::audit::redact(tool, args),
+                    false,
+                    Some(0),
+                    Some(payload),
+                    session_id.clone(),
+                    Some(ts.finish()),
+                )
+                .await;
                 return r;
             }
         },
@@ -685,14 +749,15 @@ where
         }
     };
     let _guard = crate::tray::TrayGuard::enter(&tray, tool);
-    // Single capture for both fields — same semantic boundary, no work between.
-    let policy_impl_boundary_ns = request_start.elapsed().as_nanos() as u64;
-    let t_policy_done_ns = policy_impl_boundary_ns;
-    let t_impl_start_ns = policy_impl_boundary_ns;
+    ts.mark_policy_impl_boundary();
     let started = std::time::Instant::now();
-    let outcome = fut.await;
+    let outcome = if lease_held {
+        lease.run_mutation(fut).await
+    } else {
+        fut.await
+    };
     let duration_ms = started.elapsed().as_millis() as u64;
-    let t_impl_done_ns = request_start.elapsed().as_nanos() as u64;
+    ts.mark_impl_done();
 
     if lease_held
         && (tray.cancel.is_cancelled() || matches!(outcome, Err(ToolError::Cancelled { .. })))
@@ -704,52 +769,33 @@ where
     let (call_result, audit_error) = match outcome {
         Ok(content) => (CallToolResult::success(content), None),
         Err(e) => {
-            let code = e.code();
             let msg = e.to_string();
-            let details = serde_json::to_value(&e).unwrap_or(serde_json::Value::Null);
-            let payload = serde_json::json!({ "code": code, "details": details });
+            let payload = build_error_payload(&e);
             let r =
                 CallToolResult::error(vec![Content::text(msg), Content::text(payload.to_string())]);
             (r, Some(payload))
         }
     };
-    // Captured just before audit.write; spec §3.1 says "after flush" but the
-    // flush is the measured operation, so an exact-after capture would require
-    // a double-write. The delta within a single record is < 1 µs typically.
-    let t_audit_written_ns = request_start.elapsed().as_nanos() as u64;
-    let timings = crate::audit::AuditTimings {
-        t_received_ns,
-        t_policy_done_ns,
-        t_impl_start_ns,
-        t_impl_done_ns,
-        t_audit_written_ns,
-    };
-    let rec = crate::audit::AuditRecord {
-        ts: String::new(),
-        mode: mode.to_string(),
-        tool: tool.to_string(),
-        args: redacted_args,
-        ok: audit_error.is_none(),
-        duration_ms: Some(duration_ms),
-        error: audit_error,
-        vision_fallback: None,
+    let ok = audit_error.is_none();
+    write_audit_record(
+        &audit,
+        mode,
+        tool,
+        redacted_args,
+        ok,
+        Some(duration_ms),
+        audit_error,
         session_id,
-        timings: Some(timings),
-    };
-    if let Err(e) = audit.write(rec).await {
-        tracing::error!(error = %e, tool, "audit write failed");
-    }
+        Some(ts.finish()),
+    )
+    .await;
     call_result
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
-
-    /// Serialise tests that mutate process-wide env vars (XDG_RUNTIME_DIR
-    /// for the lease's tempdir setup).
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
+    use crate::audit::tests::ENV_LOCK;
 
     async fn fresh_audit() -> (tempfile::TempDir, Arc<AuditLog>) {
         let dir = tempfile::tempdir().unwrap();
@@ -838,6 +884,161 @@ mod tests {
             !v.to_string().contains("\"secret\""),
             "secret leaked into audit"
         );
+    }
+
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test]
+    async fn both_dispatchers_emit_identically_shaped_timings() {
+        // Run dispatch_audited with a trivial Ok payload and
+        // dispatch_audited_with_content with a trivial Vec<Content>.
+        // Read the resulting AuditRecords; assert timings.is_some() and that
+        // t_received_ns <= t_policy_done_ns <= t_impl_start_ns
+        // <= t_impl_done_ns <= t_audit_written_ns on both records.
+        let _env = ENV_LOCK.lock().unwrap();
+        let (_dir, audit) = fresh_audit().await;
+        let path = _dir.path().join("a.jsonl");
+        let xdg = tempfile::tempdir().unwrap();
+        unsafe { std::env::set_var("XDG_RUNTIME_DIR", xdg.path()) };
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let tray = crate::tray::TrayState::new(cancel.clone());
+        let lease = std::sync::Arc::new(crate::lease::LeaseStore::new(
+            crate::lease::LeaseConfig::default(),
+            std::process::id(),
+            "test".into(),
+        ));
+
+        // (1) typed-payload dispatcher
+        let _ = dispatch_audited(
+            audit.clone(),
+            tray.clone(),
+            lease.clone(),
+            crate::lease::ToolKind::Observe,
+            "live",
+            None,
+            "test_a",
+            serde_json::Value::Null,
+            async { Ok::<_, ToolError>(serde_json::json!({"ok": true})) },
+        )
+        .await;
+
+        // (2) content-payload dispatcher
+        let _ = dispatch_audited_with_content(
+            audit.clone(),
+            tray.clone(),
+            lease.clone(),
+            crate::lease::ToolKind::Observe,
+            "live",
+            None,
+            "test_b",
+            serde_json::Value::Null,
+            async { Ok::<_, ToolError>(vec![Content::text("hello")]) },
+        )
+        .await;
+
+        // Flush by dropping our reference; one strong reference remains in
+        // dispatchers' captured args, but `audit.write` already completed
+        // synchronously inside each dispatcher (it awaits the write).
+        drop(audit);
+        let records = read_two_records(&path).await;
+        for rec in &records {
+            let t = rec.timings.as_ref().expect("timings present");
+            // t_received_ns is fixed at 0 today (see TimingState::start);
+            // the first inequality is therefore held by construction. Kept
+            // as documentation of the intended monotonicity invariant.
+            assert!(t.t_policy_done_ns >= t.t_received_ns);
+            assert!(t.t_impl_start_ns >= t.t_policy_done_ns);
+            assert!(t.t_impl_done_ns >= t.t_impl_start_ns);
+            assert!(t.t_audit_written_ns >= t.t_impl_done_ns);
+        }
+        assert_eq!(records[0].tool, "test_a");
+        assert_eq!(records[1].tool, "test_b");
+    }
+
+    async fn read_two_records(path: &std::path::Path) -> Vec<crate::audit::AuditRecord> {
+        for _ in 0..50 {
+            let body = tokio::fs::read_to_string(path).await.unwrap_or_default();
+            let lines: Vec<_> = body.lines().filter(|l| !l.is_empty()).collect();
+            if lines.len() >= 2 {
+                return lines
+                    .iter()
+                    .map(|l| serde_json::from_str::<crate::audit::AuditRecord>(l).unwrap())
+                    .filter(|r| r.tool == "test_a" || r.tool == "test_b")
+                    .collect();
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        panic!("audit records not flushed within 1s");
+    }
+
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test]
+    async fn mutation_keeps_lease_alive_while_waiting_for_approval() {
+        let _env = ENV_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        unsafe { std::env::set_var("XDG_RUNTIME_DIR", dir.path()) };
+        let (_audit_dir, audit) = fresh_audit().await;
+        let lease = Arc::new(crate::lease::LeaseStore::new(
+            crate::lease::LeaseConfig {
+                idle_timeout: Duration::from_millis(60),
+                acquire_timeout: Duration::from_millis(100),
+            },
+            std::process::id(),
+            "approval-test".into(),
+        ));
+        let tray = crate::tray::TrayState::new(tokio_util::sync::CancellationToken::new());
+        let response = dispatch_audited(
+            audit,
+            tray,
+            lease,
+            crate::lease::ToolKind::Mutate,
+            "live",
+            None,
+            "window_control",
+            serde_json::json!({}),
+            async {
+                tokio::time::sleep(Duration::from_millis(160)).await;
+                let record: crate::lease::LeaseRecord = serde_json::from_str(
+                    &std::fs::read_to_string(crate::lease::lease_path()).unwrap(),
+                )
+                .unwrap();
+                assert!(
+                    record.expires_at > chrono::Utc::now(),
+                    "approval wait let the lease expire"
+                );
+                Ok::<_, ToolError>(serde_json::json!({"ok": true}))
+            },
+        )
+        .await;
+        assert_ne!(response.is_error, Some(true));
+    }
+
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test]
+    async fn lost_mutation_lease_stops_pending_action() {
+        let _env = ENV_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        unsafe { std::env::set_var("XDG_RUNTIME_DIR", dir.path()) };
+        let lease = crate::lease::LeaseStore::new(
+            crate::lease::LeaseConfig {
+                idle_timeout: Duration::from_millis(60),
+                acquire_timeout: Duration::from_millis(100),
+            },
+            std::process::id(),
+            "approval-test".into(),
+        );
+        lease.acquire("window_control").await.unwrap();
+        let mut executed = false;
+        let result = lease
+            .run_mutation(async {
+                // Simulate losing ownership while blocked for an answer.
+                std::fs::remove_file(crate::lease::lease_path()).unwrap();
+                tokio::time::sleep(Duration::from_millis(120)).await;
+                executed = true;
+                Ok::<_, ToolError>(())
+            })
+            .await;
+        assert!(matches!(result, Err(ToolError::PermissionDenied { .. })));
+        assert!(!executed);
     }
 
     #[allow(clippy::await_holding_lock)]

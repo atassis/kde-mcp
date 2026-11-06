@@ -344,27 +344,40 @@ pub async fn window_control(
 
     let body = match action {
         WindowAction::Focus => format!(
-            r#"var ws = workspace; var list = ws.windowList(); for (var i=0;i<list.length;i++) {{ if (list[i].internalId && list[i].internalId.toString() === "{kwin_uuid}") {{ ws.activeWindow = list[i]; break; }} }} return {{ok: true}};"#
+            r#"var ws = workspace; var list = ws.windowList(); for (var i=0;i<list.length;i++) {{ if (list[i].internalId && list[i].internalId.toString() === "{kwin_uuid}") {{ ws.activeWindow = list[i]; return {{ok: true}}; }} }} return {{ok: false}};"#
         ),
         WindowAction::Minimize => format!(
-            r#"var ws = workspace; var list = ws.windowList(); for (var i=0;i<list.length;i++) {{ if (list[i].internalId && list[i].internalId.toString() === "{kwin_uuid}") {{ list[i].minimized = true; break; }} }} return {{ok: true}};"#
+            r#"var ws = workspace; var list = ws.windowList(); for (var i=0;i<list.length;i++) {{ if (list[i].internalId && list[i].internalId.toString() === "{kwin_uuid}") {{ list[i].minimized = true; return {{ok: true}}; }} }} return {{ok: false}};"#
         ),
         WindowAction::Maximize => format!(
-            r#"var ws = workspace; var list = ws.windowList(); for (var i=0;i<list.length;i++) {{ if (list[i].internalId && list[i].internalId.toString() === "{kwin_uuid}") {{ list[i].setMaximize(true, true); break; }} }} return {{ok: true}};"#
+            r#"var ws = workspace; var list = ws.windowList(); for (var i=0;i<list.length;i++) {{ if (list[i].internalId && list[i].internalId.toString() === "{kwin_uuid}") {{ list[i].setMaximize(true, true); return {{ok: true}}; }} }} return {{ok: false}};"#
         ),
         WindowAction::Restore => format!(
-            r#"var ws = workspace; var list = ws.windowList(); for (var i=0;i<list.length;i++) {{ if (list[i].internalId && list[i].internalId.toString() === "{kwin_uuid}") {{ list[i].minimized = false; list[i].setMaximize(false, false); break; }} }} return {{ok: true}};"#
+            r#"var ws = workspace; var list = ws.windowList(); for (var i=0;i<list.length;i++) {{ if (list[i].internalId && list[i].internalId.toString() === "{kwin_uuid}") {{ list[i].minimized = false; list[i].setMaximize(false, false); return {{ok: true}}; }} }} return {{ok: false}};"#
         ),
         WindowAction::Close => format!(
-            r#"var ws = workspace; var list = ws.windowList(); for (var i=0;i<list.length;i++) {{ if (list[i].internalId && list[i].internalId.toString() === "{kwin_uuid}") {{ list[i].closeWindow(); break; }} }} return {{ok: true}};"#
+            r#"var ws = workspace; var list = ws.windowList(); for (var i=0;i<list.length;i++) {{ if (list[i].internalId && list[i].internalId.toString() === "{kwin_uuid}") {{ list[i].closeWindow(); return {{ok: true}}; }} }} return {{ok: false}};"#
         ),
         WindowAction::Move([x, y, w, h]) | WindowAction::Resize([x, y, w, h]) => format!(
-            r#"var ws = workspace; var list = ws.windowList(); for (var i=0;i<list.length;i++) {{ if (list[i].internalId && list[i].internalId.toString() === "{kwin_uuid}") {{ list[i].frameGeometry = Qt.rect({x}, {y}, {w}, {h}); break; }} }} return {{ok: true}};"#
+            r#"var ws = workspace; var list = ws.windowList(); for (var i=0;i<list.length;i++) {{ if (list[i].internalId && list[i].internalId.toString() === "{kwin_uuid}") {{ list[i].frameGeometry = Qt.rect({x}, {y}, {w}, {h}); return {{ok: true}}; }} }} return {{ok: false}};"#
         ),
     };
-    let _ =
+    let payload =
         crate::kwin::scripting::run_script(&state.bus, &body, std::time::Duration::from_secs(2))
             .await?;
+    window_control_result(&payload)
+}
+
+fn window_control_result(payload: &str) -> Result<WindowControlResponse, ToolError> {
+    let result: serde_json::Value =
+        serde_json::from_str(payload).map_err(|error| ToolError::ExternalCommandFailed {
+            stderr: format!("window_control JSON parse: {error}"),
+        })?;
+    if result.get("ok").and_then(serde_json::Value::as_bool) != Some(true) {
+        return Err(ToolError::TargetNotFound {
+            closest_match: None,
+        });
+    }
     Ok(WindowControlResponse { ok: true })
 }
 
@@ -372,6 +385,15 @@ pub async fn window_control(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn disappeared_window_does_not_report_success() {
+        assert!(matches!(
+            super::window_control_result(r#"{"ok":false}"#),
+            Err(ToolError::TargetNotFound { .. })
+        ));
+        assert!(super::window_control_result(r#"{"ok":true}"#).is_ok());
+    }
 
     #[test]
     fn format_ids_drops_everything_but_uuid_and_class() {

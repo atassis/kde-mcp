@@ -4,6 +4,7 @@
 // times down vs. one binary per file.
 
 mod integration {
+    pub mod approval_notification;
     pub mod audit_timings;
     pub mod chord_parse;
     pub mod cli_parse;

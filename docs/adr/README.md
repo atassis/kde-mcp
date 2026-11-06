@@ -14,7 +14,7 @@ Format: 1-2 pages each. Sections: Status · Context · Decision · Consequences 
 | 0004 | Response-as-instruction over prompt-prose | Accepted |
 | 0005 | Accessibility-tree first; pixels as fallback | Accepted |
 | 0006 | 15 tools split read/write; no Anthropic-style omni-tool | Accepted (catalogue trimmed by 0013) |
-| 0007 | Adopt Anthropic computer-use safety architecture (policy gate) | Accepted |
+| 0007 | Adopt Anthropic computer-use safety architecture (policy gate) | Accepted (approval interaction superseded by 0016) |
 | 0008 | Visual prompt injection defence is host-side, not server-side  | Accepted |
 | 0009 | Phase 3–6 implementation shape (per-call EIS, SIGUSR1 cancel, …) | Accepted (§2 superseded by 0010) |
 | 0010 | Cancel UX: system tray + Meta+Esc hotkey + dispatch hooks | Accepted (Meta+Esc handoff amended by 0011) |
@@ -23,6 +23,7 @@ Format: 1-2 pages each. Sections: Status · Context · Decision · Consequences 
 | 0013 | Remove `bash`, `text_editor_*`, sleep-only `wait` (MCP-purpose rule) | Accepted |
 | 0014 | OAuth 2.1 replaces static bearer; daemon is its own auth server | Superseded by 0015 |
 | 0015 | Drop OAuth; trust is the 127.0.0.1 bind | Accepted |
+| 0016 | Wait for native app approval in the original tool call | Accepted |
 
 ## When to add an ADR
 

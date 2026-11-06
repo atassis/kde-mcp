@@ -50,6 +50,30 @@ pub struct MouseResponse {
     pub warnings: Vec<String>,
 }
 
+async fn input_targets(
+    state: &KdeMcp,
+    args: &MouseArgs,
+) -> Result<Vec<crate::policy_target::TargetSnapshot>, ToolError> {
+    use crate::policy_target::{focused_target, pointer_target, target_at_coord};
+    let primary = match args.coordinate {
+        Some([x, y]) => target_at_coord(state, x, y).await?,
+        None => focused_target(state).await?,
+    };
+    let mut targets = vec![primary];
+    if let Some([x, y]) = args.start_coordinate {
+        targets.push(target_at_coord(state, x, y).await?);
+    }
+    // Coordinate-less actions use the current pointer; modifier chords
+    // also affect focus. Neither may drift during the approval wait.
+    if args.coordinate.is_none() {
+        targets.push(pointer_target(state).await?);
+    }
+    if args.modifier.as_ref().is_some_and(|m| !m.is_empty()) {
+        targets.push(focused_target(state).await?);
+    }
+    Ok(targets)
+}
+
 pub async fn mouse(state: &KdeMcp, args: MouseArgs) -> Result<MouseResponse, ToolError> {
     let action = args.action.to_ascii_lowercase();
     let button = parse_button(args.button.as_deref().unwrap_or("left"))?;
@@ -57,15 +81,16 @@ pub async fn mouse(state: &KdeMcp, args: MouseArgs) -> Result<MouseResponse, Too
 
     // Policy gate (spec §6.0): target app = window at click coord (or active
     // window if no coord). Sentinel warnings propagate into the response.
-    let target_class = match args.coordinate {
-        Some([x, y]) => crate::policy_target::class_at_coord(state, x, y).await?,
-        None => crate::policy_target::focused_class(state).await?,
-    };
-    let target = crate::policy_target::to_target(target_class);
+    let targets_before = input_targets(state, &args).await?;
+    let target = crate::policy_target::to_target(targets_before[0].class.clone());
     let policy_warnings = state
         .policy
         .check(target, crate::policy::Action::Generic)
         .await?;
+    let targets_after = input_targets(state, &args).await?;
+    for (before, after) in targets_before.iter().zip(&targets_after) {
+        before.ensure_unchanged(after)?;
+    }
 
     // If modifiers are requested, open a combined keyboard+pointer session.
     // Press modifiers before, release after.

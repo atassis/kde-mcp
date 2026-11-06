@@ -36,8 +36,25 @@ pub struct AuditRecord {
     /// where there's only one session per process.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
+    /// Optional harness/framework tag, sourced from `KDE_MCP_SESSION_TAG`
+    /// at audit-write time. Lets evaluation runs be filtered out of
+    /// normal-use audit-log analysis. Spec docs/specs/2026-05-19-evaluation-and-latency-design.md §4.13 row 10.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_tag: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timings: Option<AuditTimings>,
+}
+
+/// Reads `KDE_MCP_SESSION_TAG` from the process env. Returns `None` if
+/// unset or empty. Used by the harness (and any other framework driving
+/// kde-mcp programmatically) to mark its runs so they can be filtered
+/// out of normal-use audit-log analysis.
+///
+/// Spec docs/specs/2026-05-19-evaluation-and-latency-design.md §4.13 row 10.
+pub fn read_session_tag() -> Option<String> {
+    std::env::var("KDE_MCP_SESSION_TAG")
+        .ok()
+        .filter(|s| !s.is_empty())
 }
 
 /// Redact sensitive args before audit-log persistence per spec §9.
@@ -90,6 +107,7 @@ impl AuditLog {
             error: None,
             vision_fallback: None,
             session_id: None,
+            session_tag: None,
             timings: None,
         })
         .await
@@ -192,14 +210,23 @@ impl AuditRecord {
             error: None,
             vision_fallback: None,
             session_id: None,
+            session_tag: None,
             timings: None,
         }
     }
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
+
+    /// Shared serialisation lock for tests that mutate process-wide env vars
+    /// (`KDE_MCP_SESSION_TAG`, `XDG_RUNTIME_DIR`, ...). One static across the
+    /// workspace's test code so audit-side and server-side dispatcher tests
+    /// don't race each other — formal UB under Rust 2024 env-mutation rules,
+    /// and silent contamination of dispatcher AuditRecords with stray
+    /// `session_tag` values otherwise.
+    pub(crate) static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     #[tokio::test]
     async fn writes_a_parseable_jsonl_line() {
@@ -216,6 +243,7 @@ mod tests {
             error: None,
             vision_fallback: None,
             session_id: None,
+            session_tag: None,
             timings: None,
         })
         .await
@@ -253,6 +281,7 @@ mod tests {
             error: None,
             vision_fallback: None,
             session_id: Some("11111111-2222-3333-4444-555555555555".into()),
+            session_tag: None,
             timings: None,
         })
         .await
@@ -332,5 +361,24 @@ mod tests {
             back.timings.is_none(),
             "timings should remain None when omitted"
         );
+    }
+
+    #[test]
+    fn audit_record_carries_session_tag_when_env_set() {
+        // SAFETY: this test mutates a process-global env var. The shared
+        // ENV_LOCK (used by every test in the workspace that touches
+        // process env) serialises us against the dispatcher tests in
+        // src/server.rs which transitively read this var via
+        // write_audit_record → read_session_tag().
+        let _g = ENV_LOCK.lock().unwrap();
+        unsafe {
+            std::env::set_var("KDE_MCP_SESSION_TAG", "harness-test-tag");
+        }
+        let tag = read_session_tag();
+        assert_eq!(tag.as_deref(), Some("harness-test-tag"));
+        unsafe {
+            std::env::remove_var("KDE_MCP_SESSION_TAG");
+        }
+        assert!(read_session_tag().is_none());
     }
 }

@@ -53,12 +53,13 @@ pub async fn keyboard_type(
     };
 
     // Policy gate — target = currently-focused window's class.
-    let target_class = crate::policy_target::focused_class(state).await?;
-    let target = crate::policy_target::to_target(target_class);
+    let target_before = crate::policy_target::focused_target(state).await?;
+    let target = crate::policy_target::to_target(target_before.class.clone());
     let policy_warnings = state
         .policy
         .check(target, crate::policy::Action::KeyboardType)
         .await?;
+    target_before.ensure_unchanged(&crate::policy_target::focused_target(state).await?)?;
 
     if needs_clipboard {
         let mut resp = type_via_clipboard(state, &args.text).await?;
@@ -130,8 +131,8 @@ pub async fn keyboard_key(
     let chord = parse_chord(&args.keys)?;
 
     // Policy gate — chord-aware so click_only tier can allow navigation.
-    let target_class = crate::policy_target::focused_class(state).await?;
-    let target = crate::policy_target::to_target(target_class);
+    let target_before = crate::policy_target::focused_target(state).await?;
+    let target = crate::policy_target::to_target(target_before.class.clone());
     let policy_warnings = state
         .policy
         .check(
@@ -141,6 +142,7 @@ pub async fn keyboard_key(
             },
         )
         .await?;
+    target_before.ensure_unchanged(&crate::policy_target::focused_target(state).await?)?;
 
     let session = EisSession::open(&state.bus, CAP_KEYBOARD, true, false).await?;
     let device = session.device.device().clone();

@@ -13,20 +13,23 @@
 //! 4. **Tier check** — looks up the resolved class in the tier table.
 //! 5. **Per-app approval** — in-memory `HashMap<class, ApprovalState>`.
 //!    First call against an unapproved app emits a KDE notification with
-//!    Allow/Deny action buttons; returns `app_approval_required`. Caller
-//!    retries after the user picks.
+//!    Allow/Deny action buttons; waits up to 60 seconds and resumes the
+//!    original call after approval. Overlapping calls share a notification.
 //! 6. **Sentinel warning emission** — when the app's policy entry has
 //!    `sentinel = "shell_access" | ...`, attaches a non-blocking warning
-//!    to the caller's response (returned via [`GateOutcome::Ok::warnings`]).
+//!    to the caller's response (returned by `check()`).
 //!
 //! `clipboard_write` skips steps 3–5 (it isn't per-app). It still hits
 //! step 6 via class-less sentinels.
 
 use crate::error::ToolError;
+use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use tokio::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Weak};
+use std::time::Duration;
+use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
 /// Tier of an application — determines which destructive tools are allowed.
@@ -126,8 +129,6 @@ pub enum ApprovalState {
     Session,
     /// User approved once (consumed after one use).
     Once,
-    /// Pending — notification sent, user hasn't picked yet.
-    Pending,
     /// User denied; treat as denied until they reset.
     Denied,
 }
@@ -156,15 +157,38 @@ pub enum Action {
 
 pub struct PolicyGate {
     config: PolicyConfig,
-    /// Shared via `Arc` so the notification action listener (`src/notify.rs`)
-    /// can mutate the map when the user clicks Allow/Deny on a policy-gate
-    /// notification. The gate's own `check()` path locks via the same Arc.
-    approvals: Arc<Mutex<HashMap<String, ApprovalState>>>,
+    approvals: Arc<Mutex<ApprovalBook>>,
+    notifier: ApprovalNotifier,
+    approval_timeout: Duration,
     cancel: CancellationToken,
     /// Disk-backed Session-approval store. `None` for tests — keeps
     /// approvals in-memory only so parallel tests don't contaminate
     /// each other (or the user's real `~/.local/state/kde-mcp/`).
     store_path: Option<PathBuf>,
+}
+
+type ApprovalFuture =
+    std::pin::Pin<Box<dyn std::future::Future<Output = Result<ApprovalDecision, String>> + Send>>;
+type ApprovalNotifier = Arc<dyn Fn(String, CancellationToken) -> ApprovalFuture + Send + Sync>;
+
+#[derive(Default)]
+struct ApprovalBook {
+    grants: HashMap<String, ApprovalState>,
+    pending: HashMap<String, Weak<PendingApproval>>,
+}
+
+struct PendingApproval {
+    result: watch::Sender<Option<Result<ApprovalDecision, String>>>,
+    once_taken: AtomicBool,
+    cancel: CancellationToken,
+}
+
+impl Drop for PendingApproval {
+    fn drop(&mut self) {
+        // A disconnected/timed-out last caller must not leave a live prompt
+        // whose eventual answer can authorize a different request.
+        self.cancel.cancel();
+    }
 }
 
 /// Persistent approval store: only `Session` decisions get written; `Once`
@@ -204,8 +228,8 @@ pub(crate) fn save_persistent_approvals(path: &Path, approvals: &HashMap<String,
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    // Only persist Session approvals; Once is ephemeral, Pending is in-flight,
-    // Denied is best left to re-prompt on next process start.
+    // Only persist Session approvals; Once is ephemeral and Denied is
+    // best left to re-prompt on next process start.
     let persisted: Vec<&str> = approvals
         .iter()
         .filter(|(_, s)| matches!(s, ApprovalState::Session))
@@ -221,7 +245,14 @@ impl PolicyGate {
         let approvals = load_persistent_approvals(&path);
         Self {
             config,
-            approvals: Arc::new(Mutex::new(approvals)),
+            approvals: Arc::new(Mutex::new(ApprovalBook {
+                grants: approvals,
+                ..Default::default()
+            })),
+            notifier: Arc::new(|app, cancel| {
+                Box::pin(crate::notify::request_app_approval(app, cancel))
+            }),
+            approval_timeout: Duration::from_secs(60),
             cancel,
             store_path: Some(path),
         }
@@ -232,7 +263,14 @@ impl PolicyGate {
     pub(crate) fn new_ephemeral(config: PolicyConfig, cancel: CancellationToken) -> Self {
         Self {
             config,
-            approvals: Arc::new(Mutex::new(HashMap::new())),
+            approvals: Arc::new(Mutex::new(ApprovalBook::default())),
+            notifier: Arc::new(|_, cancel| {
+                Box::pin(async move {
+                    cancel.cancelled().await;
+                    Err("cancelled".into())
+                })
+            }),
+            approval_timeout: Duration::from_secs(60),
             cancel,
             store_path: None,
         }
@@ -301,37 +339,25 @@ impl PolicyGate {
             },
         }
 
-        // Step 5: per-app approval.
-        let mut approvals = self.approvals.lock().await;
-        match approvals.get(&class).copied() {
-            Some(ApprovalState::Session) => {}
-            Some(ApprovalState::Once) => {
-                approvals.insert(class.clone(), ApprovalState::Pending);
-                // "once" consumed; next call re-prompts.
-            }
-            Some(ApprovalState::Denied) => {
-                approvals.remove(&class);
-                return Err(ToolError::PermissionDenied {
-                    reason: format!("user previously denied {class}"),
-                });
-            }
-            Some(ApprovalState::Pending) | None => {
-                approvals.insert(class.clone(), ApprovalState::Pending);
-                drop(approvals);
-                let nid = crate::notify::request_app_approval(
-                    &class,
-                    self.approvals.clone(),
-                    self.store_path.clone(),
-                )
-                .await;
-                return Err(ToolError::AppApprovalRequired {
-                    app_class: class,
-                    notification_id: nid,
-                    still_pending: true,
-                });
+        // Step 5: the deadline includes delivery and any additional prompt
+        // needed when another concurrent call consumes an Allow-once grant.
+        tokio::select! {
+            biased;
+            _ = self.cancel.cancelled() => return Err(ToolError::Cancelled {
+                cancelled_at_stage: "app_approval".into(),
+            }),
+            outcome = tokio::time::timeout(self.approval_timeout, self.await_approval(&class)) => {
+                outcome.map_err(|_| ToolError::Timeout {
+                    closest_match: Some(format!("approval for {class} was not received within 60 seconds")),
+                    current_windows: vec![],
+                })??;
             }
         }
-        drop(approvals);
+        if self.cancel.is_cancelled() {
+            return Err(ToolError::Cancelled {
+                cancelled_at_stage: "app_approval".into(),
+            });
+        }
 
         // Step 6: sentinel warning.
         let mut warnings = Vec::new();
@@ -341,22 +367,109 @@ impl PolicyGate {
         Ok(warnings)
     }
 
-    /// Record the user's pick from the approval notification.
-    pub async fn record_approval(&self, app_class: &str, decision: ApprovalDecision) {
-        let mut approvals = self.approvals.lock().await;
-        match decision {
-            ApprovalDecision::Once => {
-                approvals.insert(app_class.into(), ApprovalState::Once);
-            }
-            ApprovalDecision::Session => {
-                approvals.insert(app_class.into(), ApprovalState::Session);
-                if let Some(path) = &self.store_path {
-                    save_persistent_approvals(path, &approvals);
+    async fn await_approval(&self, class: &str) -> Result<(), ToolError> {
+        loop {
+            let pending = {
+                let mut book = self.approvals.lock();
+                match book.grants.get(class).copied() {
+                    Some(ApprovalState::Session) => return Ok(()),
+                    Some(ApprovalState::Once) => {
+                        book.grants.remove(class);
+                        return Ok(());
+                    }
+                    Some(ApprovalState::Denied) => {
+                        book.grants.remove(class);
+                        return Err(ToolError::PermissionDenied {
+                            reason: format!("user denied {class}"),
+                        });
+                    }
+                    None => {}
+                }
+                if let Some(pending) = book.pending.get(class).and_then(Weak::upgrade) {
+                    pending
+                } else {
+                    let (result, _) = watch::channel(None);
+                    let pending = Arc::new(PendingApproval {
+                        result,
+                        once_taken: AtomicBool::new(false),
+                        cancel: self.cancel.child_token(),
+                    });
+                    book.pending.insert(class.into(), Arc::downgrade(&pending));
+                    let notifier = self.notifier.clone();
+                    let app = class.to_string();
+                    let cancel = pending.cancel.clone();
+                    let result = pending.result.clone();
+                    tokio::spawn(async move {
+                        // The notifier owns notification cleanup. It must observe
+                        // cancellation even when the last tool future is dropped.
+                        let decision = notifier(app, cancel).await;
+                        result.send_replace(Some(decision));
+                    });
+                    pending
+                }
+            };
+            let mut result = pending.result.subscribe();
+            let decision = result
+                .wait_for(|value| value.is_some())
+                .await
+                .map_err(|_| ToolError::PermissionDenied {
+                    reason: "approval listener stopped".into(),
+                })?
+                .clone();
+            let decision = decision
+                .ok_or_else(|| ToolError::PermissionDenied {
+                    reason: "approval listener returned no decision".into(),
+                })?
+                .map_err(|reason| ToolError::PermissionDenied {
+                    reason: format!("could not obtain approval for {class}: {reason}"),
+                })?;
+            match decision {
+                ApprovalDecision::Session => {
+                    let mut book = self.approvals.lock();
+                    book.grants.insert(class.into(), ApprovalState::Session);
+                    if let Some(path) = &self.store_path {
+                        save_persistent_approvals(path, &book.grants);
+                    }
+                    return Ok(());
+                }
+                ApprovalDecision::Once => {
+                    let taken = pending.once_taken.swap(true, Ordering::SeqCst);
+                    let mut book = self.approvals.lock();
+                    if book
+                        .pending
+                        .get(class)
+                        .is_some_and(|p| p.ptr_eq(&Arc::downgrade(&pending)))
+                    {
+                        book.pending.remove(class);
+                    }
+                    if !taken {
+                        return Ok(());
+                    }
+                }
+                ApprovalDecision::Deny | ApprovalDecision::Dismissed => {
+                    return Err(ToolError::PermissionDenied {
+                        reason: format!("user denied or dismissed approval for {class}"),
+                    });
                 }
             }
-            ApprovalDecision::Deny => {
-                approvals.insert(app_class.into(), ApprovalState::Denied);
-            }
+        }
+    }
+
+    /// Supply a decision without contacting the desktop in unit tests.
+    #[cfg(test)]
+    pub async fn record_approval(&self, app_class: &str, decision: ApprovalDecision) {
+        let mut book = self.approvals.lock();
+        if let Some(pending) = book.pending.get(app_class).and_then(Weak::upgrade) {
+            pending.result.send_replace(Some(Ok(decision)));
+        } else {
+            book.grants.insert(
+                app_class.into(),
+                match decision {
+                    ApprovalDecision::Session => ApprovalState::Session,
+                    ApprovalDecision::Once => ApprovalState::Once,
+                    ApprovalDecision::Deny | ApprovalDecision::Dismissed => ApprovalState::Denied,
+                },
+            );
         }
     }
 }
@@ -366,6 +479,7 @@ pub enum ApprovalDecision {
     Once,
     Session,
     Deny,
+    Dismissed,
 }
 
 /// Keyboard navigation key allowlist used by the `click_only` tier.
@@ -417,6 +531,166 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn original_call_waits_for_approval() {
+        let g = empty_gate();
+        let call = g.check(TargetApp::Class("kate".into()), Action::Generic);
+        tokio::pin!(call);
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(100), &mut call)
+                .await
+                .is_err(),
+            "unanswered approval must keep the original call pending"
+        );
+        g.record_approval("kate", ApprovalDecision::Session).await;
+        assert!(call.await.is_ok());
+    }
+
+    type TestRequest = (
+        String,
+        CancellationToken,
+        tokio::sync::oneshot::Sender<Result<ApprovalDecision, String>>,
+    );
+
+    fn controlled_gate(
+        timeout: Duration,
+    ) -> (
+        Arc<PolicyGate>,
+        tokio::sync::mpsc::UnboundedReceiver<TestRequest>,
+    ) {
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut gate = empty_gate();
+        gate.approval_timeout = timeout;
+        gate.notifier = Arc::new(move |app, cancel| {
+            let (answer, response) = tokio::sync::oneshot::channel();
+            tx.send((app, cancel.clone(), answer)).unwrap();
+            Box::pin(async move {
+                tokio::select! {
+                    biased;
+                    _ = cancel.cancelled() => Err("cancelled".into()),
+                    result = response => result.unwrap_or_else(|_| Err("listener stopped".into())),
+                }
+            })
+        });
+        (Arc::new(gate), rx)
+    }
+
+    fn start_check(g: Arc<PolicyGate>) -> tokio::task::JoinHandle<Result<Vec<String>, ToolError>> {
+        tokio::spawn(async move {
+            g.check(TargetApp::Class("kate".into()), Action::Generic)
+                .await
+        })
+    }
+
+    #[tokio::test]
+    async fn concurrent_calls_share_session_prompt() {
+        let (g, mut requests) = controlled_gate(Duration::from_secs(1));
+        let first = start_check(g.clone());
+        let (_, _, answer) = requests.recv().await.unwrap();
+        let second = start_check(g.clone());
+        tokio::task::yield_now().await;
+        assert!(requests.try_recv().is_err());
+        assert!(!first.is_finished());
+        assert!(!second.is_finished());
+        answer.send(Ok(ApprovalDecision::Session)).unwrap();
+        assert!(first.await.unwrap().is_ok());
+        assert!(second.await.unwrap().is_ok());
+        assert!(
+            g.check(TargetApp::Class("kate".into()), Action::Generic)
+                .await
+                .is_ok()
+        );
+        assert!(requests.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn once_allows_exactly_one_concurrent_call() {
+        let (g, mut requests) = controlled_gate(Duration::from_secs(1));
+        let first = start_check(g.clone());
+        let (_, _, answer) = requests.recv().await.unwrap();
+        let second = start_check(g.clone());
+        tokio::task::yield_now().await;
+        answer.send(Ok(ApprovalDecision::Once)).unwrap();
+        let (_, _, next_answer) = requests.recv().await.unwrap();
+        tokio::task::yield_now().await;
+        assert_ne!(first.is_finished(), second.is_finished());
+        next_answer.send(Ok(ApprovalDecision::Deny)).unwrap();
+        let outcomes = [first.await.unwrap(), second.await.unwrap()];
+        assert_eq!(outcomes.iter().filter(|o| o.is_ok()).count(), 1);
+        assert_eq!(
+            outcomes
+                .iter()
+                .filter(|o| matches!(o, Err(ToolError::PermissionDenied { .. })))
+                .count(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn deny_dismissal_and_delivery_failure_fail_closed() {
+        for answer_value in [
+            Ok(ApprovalDecision::Deny),
+            Ok(ApprovalDecision::Dismissed),
+            Err("bus unavailable".into()),
+        ] {
+            let (g, mut requests) = controlled_gate(Duration::from_secs(1));
+            let call = start_check(g);
+            let (_, _, answer) = requests.recv().await.unwrap();
+            answer.send(answer_value).unwrap();
+            assert!(matches!(
+                call.await.unwrap(),
+                Err(ToolError::PermissionDenied { .. })
+            ));
+        }
+    }
+
+    #[tokio::test]
+    async fn timeout_cancels_prompt_and_late_answer_cannot_grant() {
+        let (g, mut requests) = controlled_gate(Duration::from_millis(30));
+        let call = start_check(g.clone());
+        let (_, cancel, late_answer) = requests.recv().await.unwrap();
+        assert!(matches!(
+            call.await.unwrap(),
+            Err(ToolError::Timeout { .. })
+        ));
+        assert!(cancel.is_cancelled());
+        let _ = late_answer.send(Ok(ApprovalDecision::Session));
+        let next_call = start_check(g);
+        let (_, _, answer) = requests.recv().await.unwrap();
+        assert!(!next_call.is_finished());
+        answer.send(Ok(ApprovalDecision::Deny)).unwrap();
+        assert!(next_call.await.unwrap().is_err());
+    }
+
+    #[tokio::test]
+    async fn cancellation_stops_waiting_and_closes_prompt() {
+        let (g, mut requests) = controlled_gate(Duration::from_secs(1));
+        let call = start_check(g.clone());
+        let (_, prompt_cancel, _) = requests.recv().await.unwrap();
+        g.cancel.cancel();
+        assert!(matches!(
+            call.await.unwrap(),
+            Err(ToolError::Cancelled { .. })
+        ));
+        assert!(prompt_cancel.is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn dropping_last_waiter_cancels_prompt_but_not_other_waiters() {
+        let (g, mut requests) = controlled_gate(Duration::from_secs(1));
+        let first = start_check(g.clone());
+        let (_, cancel, answer) = requests.recv().await.unwrap();
+        let second = start_check(g);
+        tokio::task::yield_now().await;
+        first.abort();
+        let _ = first.await;
+        assert!(!cancel.is_cancelled());
+        second.abort();
+        let _ = second.await;
+        assert!(cancel.is_cancelled());
+        let _ = answer.send(Ok(ApprovalDecision::Session));
+    }
+
+    #[tokio::test]
     async fn classless_tools_bypass_app_checks() {
         let g = empty_gate();
         let w = g
@@ -429,12 +703,6 @@ mod tests {
     #[tokio::test]
     async fn unknown_app_defaults_to_full_tier() {
         let g = empty_gate();
-        // First call against an unknown app prompts; we then approve and retry.
-        let err = g
-            .check(TargetApp::Class("kate".into()), Action::Generic)
-            .await
-            .unwrap_err();
-        assert_eq!(err.code(), "app_approval_required");
         g.record_approval("kate", ApprovalDecision::Session).await;
         let w = g
             .check(TargetApp::Class("kate".into()), Action::Generic)
@@ -491,14 +759,6 @@ mod tests {
         );
         let g = PolicyGate::new_ephemeral(config, CancellationToken::new());
         // Need to approve first.
-        let _ = g
-            .check(
-                TargetApp::Class("konsole".into()),
-                Action::KeyboardKey {
-                    chord_is_navigation: true,
-                },
-            )
-            .await;
         g.record_approval("konsole", ApprovalDecision::Session)
             .await;
         let w = g
@@ -547,9 +807,6 @@ mod tests {
             },
         );
         let g = PolicyGate::new_ephemeral(config, CancellationToken::new());
-        let _ = g
-            .check(TargetApp::Class("konsole".into()), Action::Generic)
-            .await;
         g.record_approval("konsole", ApprovalDecision::Session)
             .await;
         let w = g

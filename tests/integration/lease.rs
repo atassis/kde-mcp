@@ -300,3 +300,20 @@ fn mutate_tools_classified_as_mutate() {
         );
     }
 }
+
+#[test]
+fn refresh_does_not_resurrect_an_expired_lease() {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    unsafe { std::env::set_var("XDG_RUNTIME_DIR", dir.path()) };
+    let path = lease_path();
+    let store = LeaseStore::new(LeaseConfig::default(), std::process::id(), "us".into());
+    store.try_acquire_once("window_control").unwrap();
+    let mut record: LeaseRecord =
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    record.expires_at = chrono::Utc::now() - chrono::Duration::seconds(1);
+    let expired = serde_json::to_string(&record).unwrap();
+    std::fs::write(&path, &expired).unwrap();
+    assert!(!store.refresh_if_holder().unwrap());
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), expired);
+}

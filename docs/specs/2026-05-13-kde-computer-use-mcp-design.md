@@ -272,11 +272,12 @@ Every destructive tool call passes through a shared policy gate before any side 
    - `view_only` (browsers, trading platforms) — destructive tools rejected → `tier_restricted`
    - `click_only` (terminals, IDEs) — `keyboard.type` rejected; `keyboard.key` accepts only a navigation allowlist (`Tab`, `Return`, `Escape`, `Page_Up`/`Down`, `Home`/`End`, arrow keys, modifier combos like `Ctrl+C`/`Ctrl+V` allowed but not `Ctrl+Shift+T` / arbitrary chords); `mouse.click`/`scroll`/`drag` allowed
    - `full` (default) — no tier restriction
-5. **Approval check** — first destructive tool targeting a not-yet-approved app:
-   - Returns `isError: true, code: "app_approval_required", details: { app_class, app_title, requested_action, current_tier, sentinel_warning?, notification_id }`
-   - In parallel, fires `org.freedesktop.Notifications.Notify` with actions `Allow once` / `Allow this session` / `Deny`. The notification's `app_id` is `kde-mcp` so it surfaces in KDE's notification UI consistently.
-   - User picks → in-memory `HashMap<app_class, ApprovalState>` updated. Agent retries the tool; gate now passes.
-   - If agent retries before user clicks: returns the same error with `still_pending: true`. Agent should back off briefly between retries (e.g., a short observe call that also refreshes the lease).
+5. **Approval check** — first destructive tool targeting a not-yet-approved app (ADR-0016):
+   - Keeps the original call pending asynchronously for up to 60 seconds, including delivery of the native notification. No immediate `app_approval_required` error or agent retry.
+   - Fires `org.freedesktop.Notifications.Notify` with actions `Allow once` / `Allow this session` / `Deny`. Concurrent callers share one pending request per app.
+   - Approval resumes the original call; Allow once admits exactly one caller. Other waiters need another approval within their original deadline. Existing Session approval persistence is unchanged.
+   - Deny/dismissal → `permission_denied`; no answer by the deadline → `timeout`; global abort → `cancelled`; notification delivery failures fail closed. Dropping the last waiter cancels its notification lifecycle. Late decisions cannot grant permission to a new request.
+   - Mutation ownership is refreshed while the call is pending; expired/lost ownership aborts it. Keyboard/mouse targets are revalidated after approval; changed window identity/geometry, focus, or implicit pointer position fails without input. Ref-addressed actions retain their original object identity and fail if it disappears.
 6. **Sentinel warning emission** — if the target app's tier table marks `sentinel: "shell_access" | "filesystem_access" | "system_settings"`, the response carries `warnings: ["target_app:konsole — equivalent to shell access"]`. Visible to the model and the user without blocking the action.
 
 The gate is the only entry point to side effects. New destructive tools added later inherit all six steps for free.
@@ -583,10 +584,10 @@ Every error returns `{ isError: true, structuredContent: { code, ...details } }`
 | `target_not_found` | match criteria didn't resolve | `closest_match` (best near-miss) |
 | `permission_denied` | server blocklist or KWin refusal | `reason` |
 | `tier_restricted` | target app's tier disallows this action (§6.0 step 4) | `app_class`, `current_tier`, `allowed_actions` |
-| `app_approval_required` | target app not yet approved this session (§6.0 step 5) | `app_class`, `notification_id`, `still_pending?` |
+| `app_approval_required` | legacy error shape; the gate now waits for approval (ADR-0016) | `app_class`, `notification_id`, `still_pending?` |
 | `cancelled` | user invoked the cancel shortcut (`Meta+Esc`) | `cancelled_at_stage` |
 | `busy` | another `kde-mcp` session currently holds the mutation lease (ADR-0011) | `holder_pid`, `holder_intent`, `lease_expires_in_ms`, `waited_ms`, `acquire_timeout_ms` |
-| `timeout` | `wait` deadline | `closest_match`, `current_windows` |
+| `timeout` | operation or app-approval deadline | `closest_match`, `current_windows` |
 | `input_dispatch_failed` | libei call errored | retried once internally; if surfaced, `libei_version`, `kwin_version` in details |
 | `external_command_failed` | tesseract/wl-copy/etc. nonzero exit | `stderr` |
 | `bus_disconnected` | zbus connection lost | indicates the MCP process is unusable; host should restart it |
@@ -624,8 +625,8 @@ Nine layers (post-[[adr/0013-remove-shell-and-file-tools]] retired two bash-spec
 
 1. **Honest tool annotations.** `readOnlyHint: true` on the 6 observation tools; `destructiveHint: true` on the 5 mutating tools. No tool carries `openWorldHint: true` after [[adr/0013-remove-shell-and-file-tools]] retired `bash`. Hosts use these to decide which to auto-allow vs. prompt.
 2. **Audit log always on.** Local JSONL; `tail -f` for live review. Every gate decision (approval grant, tier rejection, cancellation) is also logged.
-3. **Per-session mutation lease.** `$XDG_RUNTIME_DIR/kde-mcp/lease.json` (POSIX flock on read/write). Multiple `kde-mcp --mode=live` may run concurrently — one per Claude Code session. Mutating tool calls serialize via the lease (acquire on dispatch, refresh on each subsequent call by the same holder, auto-expire after `idle_timeout` of inactivity, release on process exit / cancel). Observation calls are never blocked. Stale holders detected via `kill -0`. Notifications via `org.freedesktop.Notifications` on first acquire ("Claude is using your computer · press Meta+Esc to stop") and on clean shutdown ("Claude finished using your computer"). See `docs/adr/0011-multi-session-lease.md`.
-4. **Per-app approval per session** (gate step 5). First destructive tool against a not-yet-approved app returns `app_approval_required` and fires a notification with `Allow once` / `Allow this session` / `Deny` action buttons. State is in-memory, lost on process restart.
+3. **Per-session mutation lease.** `$XDG_RUNTIME_DIR/kde-mcp/lease.json` (POSIX flock on read/write). Multiple `kde-mcp --mode=live` may run concurrently — one per Claude Code session. Mutating tool calls serialize via the lease (acquire on dispatch, refresh while a mutation is in flight and on subsequent calls by the same holder, auto-expire after `idle_timeout` of inactivity, release on process exit / cancel). Observation calls are never blocked. Stale holders detected via `kill -0`. Notifications via `org.freedesktop.Notifications` on first acquire ("Claude is using your computer · press Meta+Esc to stop") and on clean shutdown ("Claude finished using your computer"). See `docs/adr/0011-multi-session-lease.md`.
+4. **Per-app approval** (gate step 5; ADR-0016). First destructive tool against a not-yet-approved app waits up to 60 seconds for a notification with `Allow once` / `Allow this session` / `Deny` action buttons. Approval resumes that same call; deny/dismissal/timeout/cancellation does not execute it. Pending requests are shared per app; Once permits one call. The existing disk-backed Session approval store is unchanged.
 5. **App-category tiering** (gate step 4). `view_only` (browsers): destructive tools blocked. `click_only` (terminals, IDEs): typing blocked, click/navigation allowed. `full`: default. Table at `~/.config/kde-mcp/policy.toml`, user-overridable. Tier rejection returns `tier_restricted`.
 6. **Sentinel warnings** (gate step 6). When a destructive action targets an app marked with a sentinel (`shell_access`, `filesystem_access`, `system_settings`), the response carries `warnings: [...]`. Non-blocking; informational for both the model and the user.
 7. **Terminal-excluded screenshots.** When `screenshot` is invoked, terminal-class windows (`konsole`, `yakuake`, `alacritty`, `kitty`, `wezterm`, `foot`, `ghostty`, `tilix`, `gnome-terminal`, `xterm`, `xfce4-terminal`, `ptyxis`, `warp-terminal`, …) are detected via KWin Scripting and their geometry is overwritten with a solid black rectangle + `[terminal masked]` label before the PNG is returned. Defense against on-screen content in the agent's own terminal feeding back as prompt injection. Config-overridable per class.
